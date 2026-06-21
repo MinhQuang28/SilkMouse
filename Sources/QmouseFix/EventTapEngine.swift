@@ -18,6 +18,7 @@ final class EventTapEngine {
     private var smoothScroll = false
     private var spaceDragButton = 0
     private var spaceDragThreshold = 200.0
+    private var captureMode = false
     private var mappingsByButton: [Int: RemapAction] = [:]
 
     /// Smooth scrolling + drag-to-switch-Spaces; only ever touched on the tap thread.
@@ -33,6 +34,12 @@ final class EventTapEngine {
         t.qualityOfService = .userInteractive
         thread = t
         t.start()
+    }
+
+    /// While capturing in Settings, let mouse-button events pass through to the UI (so the capture
+    /// field can read which button was clicked) instead of remapping/swallowing them.
+    func setCaptureMode(_ on: Bool) {
+        lock.lock(); captureMode = on; lock.unlock()
     }
 
     /// Update the live snapshot when config changes.
@@ -84,12 +91,22 @@ final class EventTapEngine {
 
         lock.lock()
         let on = enabled
+        let capturing = captureMode
         let maps = mappingsByButton
         let reverse = reverseScroll
         let smooth = smoothScroll
         spaceDrag.button = spaceDragButton
         spaceDrag.threshold = spaceDragThreshold
         lock.unlock()
+
+        // During capture, let button events reach the Settings UI untouched.
+        if capturing {
+            switch type {
+            case .otherMouseDown, .otherMouseUp, .otherMouseDragged:
+                return Unmanaged.passUnretained(event)
+            default: break
+            }
+        }
 
         guard on else { return Unmanaged.passUnretained(event) }
 

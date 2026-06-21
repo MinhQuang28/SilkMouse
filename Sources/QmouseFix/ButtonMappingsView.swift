@@ -1,20 +1,17 @@
 import SwiftUI
 
-/// Editable list of button → action mappings (Settings ▸ Buttons).
+/// Button mappings (Settings ▸ Buttons). Add a mapping by clicking your actual mouse button into the
+/// capture field (MMF-style), then assign an action — no guessing button numbers.
 struct ButtonMappingsView: View {
     @EnvironmentObject var store: ConfigStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Button mappings").font(.headline)
-                Spacer()
-                Button { addMapping() } label: { Label("Add", systemImage: "plus") }
-            }
+            ButtonCaptureField(onCapture: addMapping)
 
             if store.config.mappings.isEmpty {
                 ContentUnavailableView("No mappings", systemImage: "computermouse",
-                                       description: Text("Add a mapping to remap a mouse button."))
+                                       description: Text("Click the field above with a side button to start."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
@@ -24,17 +21,14 @@ struct ButtonMappingsView: View {
                 }
                 .listStyle(.inset)
             }
-
-            Text("Side buttons (4, 5) are the usual targets. The action fires on button press.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
-    /// Append a mapping on the lowest unused button number.
-    private func addMapping() {
-        let used = Set(store.config.mappings.map(\.buttonNumber))
-        let next = (3...20).first { !used.contains($0) } ?? 4
-        store.config.mappings.append(ButtonMapping(buttonNumber: next, action: .spaceLeft))
+    /// Add a mapping for a freshly-captured button (ignore left/right click, and duplicates).
+    private func addMapping(button: Int) {
+        guard button >= 3 else { return } // don't let users break left/right click
+        guard !store.config.mappings.contains(where: { $0.buttonNumber == button }) else { return }
+        store.config.mappings.append(ButtonMapping(buttonNumber: button, action: .spaceLeft))
     }
 
     private func delete(_ id: UUID) {
@@ -42,18 +36,15 @@ struct ButtonMappingsView: View {
     }
 }
 
-/// One editable row: button-number picker + action picker + delete.
+/// One row: captured button (fixed label) + action control + delete.
 private struct MappingRow: View {
     @Binding var mapping: ButtonMapping
     let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Picker("", selection: $mapping.buttonNumber) {
-                ForEach(3...9, id: \.self) { Text("Button \($0)").tag($0) }
-            }
-            .labelsHidden()
-            .frame(width: 120)
+            Label("Button \(mapping.buttonNumber)", systemImage: "computermouse.fill")
+                .frame(width: 110, alignment: .leading)
 
             Image(systemName: "arrow.right").foregroundStyle(.secondary)
 
