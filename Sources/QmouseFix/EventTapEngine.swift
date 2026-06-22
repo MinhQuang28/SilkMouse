@@ -27,6 +27,9 @@ final class EventTapEngine {
     private var captureMode = false
     private var mappingsByButton: [Int: RemapAction] = [:]
 
+    /// Source for the fresh wheel events we post to reverse Standard-mode scrolling (see below).
+    private let scrollSource = CGEventSource(stateID: .hidSystemState)
+
     /// Smooth scrolling + drag-to-switch-Spaces; only ever touched on the tap thread.
     private let scrollAnimator = ScrollAnimator()
     private let spaceDrag = SpaceDragGesture()
@@ -249,12 +252,25 @@ final class EventTapEngine {
                 return nil // swallow; the animator drives the pixel scroll
             }
             if reverse {
-                // Integer line + pixel deltas...
-                negate(event, .scrollWheelEventDeltaAxis1); negate(event, .scrollWheelEventPointDeltaAxis1)
-                negate(event, .scrollWheelEventDeltaAxis2); negate(event, .scrollWheelEventPointDeltaAxis2)
-                // ...and the fixed-point deltas, which AppKit actually reads for scrolling.
-                negateDouble(event, .scrollWheelEventFixedPtDeltaAxis1)
-                negateDouble(event, .scrollWheelEventFixedPtDeltaAxis2)
+                // macOS does NOT honor in-place delta edits on a passed-through wheel event — the
+                // system re-reads the original kernel deltas, so negating the fields in place is
+                // invisible (this is why reverse worked in Smooth, which posts fresh events, but not
+                // in Standard). So build a FRESH reversed wheel event carrying the negated line, pixel
+                // and fixed-point deltas, tag it so our tap skips it, post it, and swallow the original.
+                guard let rev = CGEvent(scrollWheelEvent2Source: scrollSource, units: .line,
+                                        wheelCount: 2, wheel1: Int32(lineV), wheel2: Int32(lineH),
+                                        wheel3: 0) else { return Unmanaged.passUnretained(event) }
+                rev.setIntegerValueField(.scrollWheelEventPointDeltaAxis1,
+                    value: -event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
+                rev.setIntegerValueField(.scrollWheelEventPointDeltaAxis2,
+                    value: -event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2))
+                rev.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1,
+                    value: -event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1))
+                rev.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2,
+                    value: -event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2))
+                rev.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
+                rev.post(tap: .cghidEventTap)
+                return nil
             }
             return Unmanaged.passUnretained(event)
 
@@ -295,16 +311,6 @@ private func scaleInt(_ event: CGEvent, _ field: CGEventField, _ factor: Double)
 /// Scale a fixed-point (double) scroll field in place.
 private func scaleDouble(_ event: CGEvent, _ field: CGEventField, _ factor: Double) {
     event.setDoubleValueField(field, value: event.getDoubleValueField(field) * factor)
-}
-
-/// Flip the sign of an integer scroll field in place (used for reverse scrolling).
-private func negate(_ event: CGEvent, _ field: CGEventField) {
-    event.setIntegerValueField(field, value: -event.getIntegerValueField(field))
-}
-
-/// Flip the sign of a fixed-point (double) scroll field in place.
-private func negateDouble(_ event: CGEvent, _ field: CGEventField) {
-    event.setDoubleValueField(field, value: -event.getDoubleValueField(field))
 }
 
 /// Top-level C-compatible callback (CGEventTapCallBack). Forwards to the engine via `refcon`.
