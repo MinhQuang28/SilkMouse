@@ -8,7 +8,7 @@ SWIFT="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
 
 APP_NAME="QmouseFix"
 BUNDLE_ID="com.qmousefix.app"
-VERSION="0.1.0"
+VERSION="0.2.0"
 OUT="build/${APP_NAME}.app"
 
 echo "==> swift build -c release"
