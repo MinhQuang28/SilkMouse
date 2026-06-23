@@ -22,6 +22,7 @@ final class EventTapEngine {
     private var scrollMode: ScrollMode = .smooth
     private var scrollSpeed = 0.5
     private var scrollLines = 3
+    private var scrollAcceleration = true
     private var smoothHighRes = false
     private var spaceDragButton = 0
     private var spaceDragThreshold = 200.0
@@ -147,6 +148,7 @@ final class EventTapEngine {
         scrollMode = config.scrollMode
         scrollSpeed = config.scrollSpeed
         scrollLines = config.scrollLines
+        scrollAcceleration = config.scrollAcceleration
         smoothHighRes = config.smoothHighRes
         spaceDragButton = config.spaceDragButton
         spaceDragThreshold = config.spaceDragThreshold
@@ -206,6 +208,7 @@ final class EventTapEngine {
         let mode = scrollMode
         let speed = scrollSpeed
         let lines = scrollLines
+        let accelerate = scrollAcceleration
         let smoothHiRes = smoothHighRes
         spaceDrag.button = spaceDragButton
         spaceDrag.threshold = spaceDragThreshold
@@ -297,7 +300,7 @@ final class EventTapEngine {
             let animated = (mode == .smooth || mode == .smoothStep)
             if animated, lineV != 0 || lineH != 0 {
                 scrollAnimator.addTick(lineV: lineV, lineH: lineH, speed: speed,
-                                       stepped: mode == .smoothStep, lines: lines)
+                                       stepped: mode == .smoothStep, lines: lines, accelerate: accelerate)
                 return nil // swallow; the animator drives the pixel scroll
             }
             if reverse {

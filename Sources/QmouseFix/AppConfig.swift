@@ -30,6 +30,7 @@ struct AppConfig: Codable, Sendable {
     var scrollMode: ScrollMode = .smooth
     var scrollSpeed: Double = 0.5       // 0.2 (slow) … 1.5 (fast); scales smooth-scroll momentum
     var scrollLines: Int = 3            // lines per notch in Smooth-step mode (Windows default = 3)
+    var scrollAcceleration: Bool = true // rapid consecutive notches scroll farther (Smooth mode only)
     var smoothHighRes: Bool = false     // also smooth high-res "continuous" mice (e.g. Keychron M6) that
                                         // lack a flywheel; keep off for MX-Master-style free-spin mice
     var spaceDragButton: Int = 0        // 0 = off; else button held to drag-switch Spaces
@@ -48,7 +49,8 @@ struct AppConfig: Codable, Sendable {
 /// (which would wipe the user's saved config). Encoding stays synthesized.
 extension AppConfig {
     enum CodingKeys: String, CodingKey {
-        case enabled, reverseScroll, scrollMode, smoothScroll, scrollSpeed, scrollLines, smoothHighRes
+        case enabled, reverseScroll, scrollMode, smoothScroll, scrollSpeed, scrollLines
+        case scrollAcceleration, smoothHighRes
         case spaceDragButton, spaceDragThreshold, spaceDragReverse, mappings
     }
 
@@ -65,6 +67,7 @@ extension AppConfig {
         }
         scrollSpeed        = try c.decodeIfPresent(Double.self,          forKey: .scrollSpeed)        ?? scrollSpeed
         scrollLines        = try c.decodeIfPresent(Int.self,             forKey: .scrollLines)        ?? scrollLines
+        scrollAcceleration = try c.decodeIfPresent(Bool.self,            forKey: .scrollAcceleration) ?? scrollAcceleration
         smoothHighRes      = try c.decodeIfPresent(Bool.self,            forKey: .smoothHighRes)      ?? smoothHighRes
         spaceDragButton    = try c.decodeIfPresent(Int.self,             forKey: .spaceDragButton)    ?? spaceDragButton
         spaceDragThreshold = try c.decodeIfPresent(Double.self,          forKey: .spaceDragThreshold) ?? spaceDragThreshold
@@ -80,6 +83,7 @@ extension AppConfig {
         try c.encode(scrollMode, forKey: .scrollMode)
         try c.encode(scrollSpeed, forKey: .scrollSpeed)
         try c.encode(scrollLines, forKey: .scrollLines)
+        try c.encode(scrollAcceleration, forKey: .scrollAcceleration)
         try c.encode(smoothHighRes, forKey: .smoothHighRes)
         try c.encode(spaceDragButton, forKey: .spaceDragButton)
         try c.encode(spaceDragThreshold, forKey: .spaceDragThreshold)

@@ -17,6 +17,7 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded.scrollMode, .smooth)
         XCTAssertEqual(decoded.scrollSpeed, 0.5, accuracy: 1e-9)
         XCTAssertEqual(decoded.scrollLines, 3)
+        XCTAssertEqual(decoded.scrollAcceleration, true)
         XCTAssertEqual(decoded.smoothHighRes, false)
         XCTAssertEqual(decoded.reverseScroll, false)
         XCTAssertEqual(decoded.mappings.count, AppConfig.defaultMappings.count)
@@ -29,6 +30,7 @@ final class AppConfigTests: XCTestCase {
         config.scrollMode = .smoothStep
         config.scrollSpeed = 1.3
         config.scrollLines = 7
+        config.scrollAcceleration = false
         config.smoothHighRes = true
         config.spaceDragButton = 4
         config.spaceDragThreshold = 250
@@ -41,6 +43,7 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded.scrollMode, .smoothStep)
         XCTAssertEqual(decoded.scrollSpeed, 1.3, accuracy: 1e-9)
         XCTAssertEqual(decoded.scrollLines, 7)
+        XCTAssertEqual(decoded.scrollAcceleration, false)
         XCTAssertEqual(decoded.smoothHighRes, true)
         XCTAssertEqual(decoded.spaceDragButton, 4)
         XCTAssertEqual(decoded.spaceDragThreshold, 250, accuracy: 1e-9)

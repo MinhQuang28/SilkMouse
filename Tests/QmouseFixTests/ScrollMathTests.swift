@@ -81,6 +81,33 @@ final class ScrollMathTests: XCTestCase {
         XCTAssertEqual(remaining, 0)
     }
 
+    // MARK: - Acceleration (speedup) curve
+
+    /// A fast same-direction notch ramps the multiplier up; it never exceeds the ceiling.
+    func testAccelRampsUpAndCaps() {
+        var a = 1.0
+        for _ in 0..<20 { a = ScrollAnimator.nextAccel(current: a, gap: 0.05, sameDir: true) }
+        XCTAssertGreaterThan(a, 1.0)
+        XCTAssertLessThanOrEqual(a, 2.05 + 1e-9, "must not exceed accelMax")
+    }
+
+    /// A slow notch (large gap) resets the multiplier to 1.0 even at high current value.
+    func testAccelResetsOnSlowTick() {
+        XCTAssertEqual(ScrollAnimator.nextAccel(current: 2.5, gap: 1.0, sameDir: true), 1.0, accuracy: 1e-9)
+    }
+
+    /// Reversing direction resets the multiplier even when ticks are fast.
+    func testAccelResetsOnDirectionChange() {
+        XCTAssertEqual(ScrollAnimator.nextAccel(current: 2.0, gap: 0.05, sameDir: false), 1.0, accuracy: 1e-9)
+    }
+
+    /// One fast tick from rest grows the multiplier above 1.0 but stays modest.
+    func testAccelSingleFastTick() {
+        let a = ScrollAnimator.nextAccel(current: 1.0, gap: 0.05, sameDir: true)
+        XCTAssertGreaterThan(a, 1.0)
+        XCTAssertLessThan(a, 2.0)
+    }
+
     /// A crisper response (Smooth-step) settles in fewer frames than the floatier Smooth response.
     func testCrisperResponseSettlesFaster() {
         func frames(response: Double) -> Int {

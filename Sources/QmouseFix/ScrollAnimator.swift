@@ -66,14 +66,35 @@ final class ScrollAnimator: NSObject {
     private let maxRemaining = 6000.0 // px clamp so a fast spin can't accumulate an absurd target
     private let stopDistance = 0.1    // px; below this the remaining is flushed and the glide settles
 
+    // Acceleration: rapid consecutive notches in the same direction multiply each notch's distance, so a
+    // fast flick travels much farther than slow, deliberate clicks (MMF-style "scroll speedup").
+    private var lastTickTime = 0.0    // when the previous notch arrived (for the inter-tick gap)
+    private var lastTickDir = 0       // sign of the previous notch's dominant axis (for reset on reversal)
+    private var accel = 1.0           // current speedup multiplier (1.0 = none)
+    private static let accelGap = 0.18  // s; notches closer than this ramp the multiplier up
+    private static let accelStep = 0.28 // multiplier added per consecutive fast notch
+    private static let accelMax = 2.05  // ceiling so a fast spin can't fling absurdly far
+
     /// Feed a wheel notch (line deltas, already direction-corrected). In Smooth-step mode each notch is
     /// a fixed `lines`-line step with a crisp ease and no coast; otherwise `speed` scales a momentum glide.
-    func addTick(lineV: Double, lineH: Double, speed: Double, stepped: Bool, lines: Int) {
+    func addTick(lineV: Double, lineH: Double, speed: Double, stepped: Bool, lines: Int, accelerate: Bool) {
         let now = CACurrentMediaTime()
-        let dist = stepped ? Double(lines) * pixelsPerLine : pixelsPerNotch * speed
+        var dist = stepped ? Double(lines) * pixelsPerLine : pixelsPerNotch * speed
 
         lock.lock()
         response = stepped ? responseStep : responseSmooth
+        // Acceleration applies to momentum (Smooth) only — Smooth-step's fixed N-line step must stay
+        // constant per notch. Ramp the multiplier on rapid same-direction notches; reset otherwise.
+        if accelerate && !stepped {
+            let dir = lineV != 0 ? (lineV > 0 ? 1 : -1) : (lineH > 0 ? 1 : -1)
+            accel = ScrollAnimator.nextAccel(current: accel, gap: now - lastTickTime,
+                                             sameDir: dir == lastTickDir)
+            lastTickDir = dir
+            dist *= accel
+        } else {
+            accel = 1.0
+        }
+        lastTickTime = now
         // Reversing direction: drop the opposing remainder so the flip is immediate, not muddy.
         if lineV != 0, (lineV > 0) != (remV > 0) { remV = 0; carryV = 0 }
         if lineH != 0, (lineH > 0) != (remH > 0) { remH = 0; carryH = 0 }
@@ -110,6 +131,14 @@ final class ScrollAnimator: NSObject {
     }
 
     private func clampDist(_ v: Double) -> Double { max(-maxRemaining, min(maxRemaining, v)) }
+
+    /// Pure speedup-curve step (extracted so it's unit-testable): a notch within `accelGap` of the
+    /// previous one AND in the same direction bumps the multiplier by `accelStep` up to `accelMax`;
+    /// any slow or reversed notch resets to 1.0.
+    static func nextAccel(current: Double, gap: Double, sameDir: Bool) -> Double {
+        guard sameDir, gap < accelGap else { return 1.0 }
+        return min(accelMax, current + accelStep)
+    }
 
     /// Close any in-flight glide/gesture immediately and reset, so the NEXT scroll opens a fresh
     /// `began`. A smooth gesture that spans a Space switch gets orphaned (the new Space's window never

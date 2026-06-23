@@ -52,6 +52,7 @@ struct SettingsView: View {
                     } minimumValueLabel: { Text("Slow").font(.caption) }
                       maximumValueLabel: { Text("Fast").font(.caption) }
                 }
+                Toggle("Scroll acceleration", isOn: $store.config.scrollAcceleration)
             }
             if store.config.scrollMode == .smoothStep {
                 Stepper(value: $store.config.scrollLines, in: 1...10) {
