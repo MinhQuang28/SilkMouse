@@ -1,5 +1,5 @@
 import XCTest
-@testable import QmouseFix
+@testable import SilkMouse
 
 /// Guards the persisted-config contract: round-trips, tolerant decoding (a missing key must fall back
 /// to a default, never throw — throwing would wipe the user's saved settings), and the legacy

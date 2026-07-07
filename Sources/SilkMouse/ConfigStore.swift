@@ -18,11 +18,19 @@ final class ConfigStore: ObservableObject {
     private let fileURL: URL
 
     private init() {
-        let dir = FileManager.default
+        let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("QmouseFix", isDirectory: true)
+        let dir = support.appendingPathComponent("SilkMouse", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("config.json")
+
+        // One-time migration: the app used to be called QmouseFix — adopt its config so the
+        // rename doesn't silently reset anyone's settings. (Copy, not move: harmless leftover.)
+        let legacy = support.appendingPathComponent("QmouseFix/config.json")
+        if !FileManager.default.fileExists(atPath: fileURL.path),
+           FileManager.default.fileExists(atPath: legacy.path) {
+            try? FileManager.default.copyItem(at: legacy, to: fileURL)
+        }
 
         if let data = try? Data(contentsOf: fileURL),
            let loaded = try? JSONDecoder().decode(AppConfig.self, from: data) {

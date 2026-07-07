@@ -1,4 +1,4 @@
-# QmouseFix
+# SilkMouse
 
 A lightweight, single-process menu-bar mouse utility for macOS 15+ (Sequoia and later).
 It gives a plain USB/Bluetooth mouse the things macOS leaves out: smooth scrolling, button
@@ -42,26 +42,26 @@ or any system configuration changes.
 
 ## Install
 
-> **Note for testers:** QmouseFix is currently signed with a **local (non-notarized) certificate**
+> **Note for testers:** SilkMouse is currently signed with a **local (non-notarized) certificate**
 > — there is no Apple Developer ID behind it yet — so macOS will block the app on first launch.
 > That warning is expected; the steps below get past it. If you'd rather not trust a pre-built
 > binary, build from source instead (no Gatekeeper steps needed).
 
 ### Option 1 — Download the pre-built app
 
-1. Download `QmouseFix.zip` from the
-   [latest release](https://github.com/MinhQuang28/QmouseFix/releases), unzip it, and move
-   `QmouseFix.app` into `/Applications`.
+1. Download `SilkMouse.zip` from the
+   [latest release](https://github.com/MinhQuang28/SilkMouse/releases), unzip it, and move
+   `SilkMouse.app` into `/Applications`.
 2. Clear the Gatekeeper quarantine flag (a downloaded, non-notarized app won't open without it):
 
    ```sh
-   xattr -dr com.apple.quarantine /Applications/QmouseFix.app
+   xattr -dr com.apple.quarantine /Applications/SilkMouse.app
    ```
 
    Or the UI route: double-click the app once (macOS blocks it), then System Settings →
    Privacy & Security → scroll down → **Open Anyway**.
 3. Launch it and grant **Accessibility** access: System Settings → Privacy & Security →
-   Accessibility → enable QmouseFix.
+   Accessibility → enable SilkMouse.
 
 ### Option 2 — Build from source
 
@@ -72,11 +72,11 @@ Requires the Xcode (beta) Swift toolchain.
 # survives every rebuild (otherwise the app re-prompts after each build).
 tools/setup-signing-cert.sh
 
-# Build the menu-bar .app into build/QmouseFix.app
+# Build the menu-bar .app into build/SilkMouse.app
 ./build-app.sh
 
 # Run it
-open build/QmouseFix.app
+open build/SilkMouse.app
 ```
 
 ## Usage
@@ -102,8 +102,8 @@ tools/package-release.sh --publish
 
 | Path | Purpose |
 |------|---------|
-| `Sources/QmouseFix/` | App source (event tap, scroll animator, settings UI, config) |
-| `Tests/QmouseFixTests/` | Unit tests |
+| `Sources/SilkMouse/` | App source (event tap, scroll animator, settings UI, config) |
+| `Tests/SilkMouseTests/` | Unit tests |
 | `build-app.sh` | Assemble & sign the `.app` bundle |
 | `tools/setup-signing-cert.sh` | Create the stable local signing certificate |
 | `tools/package-release.sh` | Build, zip, hash, and (optionally) publish a release |

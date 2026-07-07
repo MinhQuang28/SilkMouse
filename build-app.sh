@@ -1,14 +1,14 @@
 #!/bin/bash
-# Build QmouseFix and assemble a runnable menu-bar .app bundle (ad-hoc signed).
+# Build SilkMouse and assemble a runnable menu-bar .app bundle (ad-hoc signed).
 set -euo pipefail
 
 cd "$(dirname "$0")"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 SWIFT="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
 
-APP_NAME="QmouseFix"
-BUNDLE_ID="com.qmousefix.app"
-VERSION="0.3.0"
+APP_NAME="SilkMouse"
+BUNDLE_ID="com.silkmouse.app"
+VERSION="0.4.0"
 OUT="build/${APP_NAME}.app"
 
 echo "==> swift build -c release"
@@ -36,7 +36,7 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>${VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSHumanReadableCopyright</key><string>QmouseFix</string>
+    <key>NSHumanReadableCopyright</key><string>SilkMouse</string>
 </dict>
 </plist>
 PLIST
@@ -45,7 +45,7 @@ PLIST
 # A fixed cert keeps the designated requirement constant across rebuilds, so Accessibility
 # is granted ONCE and survives every rebuild. Fall back to ad-hoc if the cert isn't set up.
 SIGN_HASH="$(security find-identity "$HOME/Library/Keychains/login.keychain-db" \
-    | awk '/QmouseFix Local Signing/ {print $2; exit}')"
+    | awk '/SilkMouse Local Signing/ {print $2; exit}')"
 if [ -n "$SIGN_HASH" ]; then
     echo "==> signing with stable identity ($SIGN_HASH)"
     codesign --force --sign "$SIGN_HASH" --timestamp=none "$OUT" >/dev/null 2>&1

@@ -18,7 +18,7 @@ struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
-            Toggle("Enable QmouseFix", isOn: $store.config.enabled)
+            Toggle("Enable SilkMouse", isOn: $store.config.enabled)
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, newValue in
                     LoginItem.setEnabled(newValue)

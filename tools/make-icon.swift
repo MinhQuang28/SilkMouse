@@ -12,14 +12,33 @@ func renderPNG(_ px: Int) -> Data {
     let image = NSImage(size: NSSize(width: s, height: s))
     image.lockFocus()
 
-    // Rounded gradient background (leave a small margin like a real app icon)
+    // Rounded satin background (leave a small margin like a real app icon): deep indigo →
+    // violet, lit diagonally like sheened silk.
     let rect = NSRect(x: 0, y: 0, width: s, height: s).insetBy(dx: s * 0.045, dy: s * 0.045)
     let bg = NSBezierPath(roundedRect: rect, xRadius: s * 0.225, yRadius: s * 0.225)
     let gradient = NSGradient(colors: [
-        NSColor(calibratedRed: 0.33, green: 0.49, blue: 0.98, alpha: 1),
-        NSColor(calibratedRed: 0.15, green: 0.23, blue: 0.64, alpha: 1),
+        NSColor(calibratedRed: 0.62, green: 0.35, blue: 0.95, alpha: 1),
+        NSColor(calibratedRed: 0.26, green: 0.14, blue: 0.58, alpha: 1),
     ])!
-    gradient.draw(in: bg, angle: -90)
+    gradient.draw(in: bg, angle: -70)
+
+    // Silk ribbon: a band of translucent S-curves sweeping behind the glyph — the smooth-scroll
+    // wave the app is named for. Clipped to the rounded square.
+    NSGraphicsContext.current?.saveGraphicsState()
+    bg.setClip()
+    for (offset, alpha, width) in [(-0.07, 0.16, 0.050), (0.0, 0.28, 0.040), (0.06, 0.14, 0.030)] {
+        let path = NSBezierPath()
+        let y = s * (0.30 + offset)
+        path.move(to: NSPoint(x: rect.minX - s * 0.05, y: y))
+        path.curve(to: NSPoint(x: rect.maxX + s * 0.05, y: y + s * 0.34),
+                   controlPoint1: NSPoint(x: s * 0.38, y: y - s * 0.18),
+                   controlPoint2: NSPoint(x: s * 0.62, y: y + s * 0.52))
+        path.lineWidth = s * width
+        path.lineCapStyle = .round
+        NSColor.white.withAlphaComponent(alpha).setStroke()
+        path.stroke()
+    }
+    NSGraphicsContext.current?.restoreGraphicsState()
 
     // White mouse glyph, centered
     let cfg = NSImage.SymbolConfiguration(pointSize: s * 0.52, weight: .semibold)

@@ -29,7 +29,7 @@ import QuartzCore
 final class ScrollAnimator: NSObject {
 
     /// Marks our own synthetic scroll events (via `.eventSourceUserData`) so the tap skips them.
-    static let syntheticTag: Int64 = 0x5132_4D46 // "Q2MF"
+    static let syntheticTag: Int64 = 0x534C_4B4D // "SLKM"
 
     private let lock = NSLock()
     private var remV = 0.0     // pixels still to emit, vertical (the running scroll target)
@@ -333,7 +333,7 @@ final class ScrollAnimator: NSObject {
     /// concurrent wake can't double-spawn); caller starts the returned thread AFTER unlocking.
     private func spawnLinkThreadLocked() -> Thread {
         let t = Thread { [weak self] in self?.runLoop() }
-        t.name = "com.qmousefix.scroll-animator"
+        t.name = "com.silkmouse.scroll-animator"
         t.qualityOfService = .userInteractive
         thread = t
         return t

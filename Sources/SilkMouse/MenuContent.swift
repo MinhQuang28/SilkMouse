@@ -17,7 +17,7 @@ struct MenuContent: View {
         SettingsLink { Text("Settings…") }
             .keyboardShortcut(",")
 
-        Button("Quit QmouseFix") { NSApplication.shared.terminate(nil) }
+        Button("Quit SilkMouse") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
     }
 }

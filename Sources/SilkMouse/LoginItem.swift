@@ -1,6 +1,6 @@
 import ServiceManagement
 
-/// Launch-at-login via SMAppService (macOS 13+). QmouseFix is a single app, so we register the
+/// Launch-at-login via SMAppService (macOS 13+). SilkMouse is a single app, so we register the
 /// main app bundle itself — no separate helper/daemon needed.
 enum LoginItem {
 
@@ -15,7 +15,7 @@ enum LoginItem {
             default:                                  break
             }
         } catch {
-            NSLog("QmouseFix: login-item toggle failed: \(error.localizedDescription)")
+            NSLog("SilkMouse: login-item toggle failed: \(error.localizedDescription)")
         }
     }
 }
