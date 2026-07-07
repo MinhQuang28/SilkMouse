@@ -29,6 +29,7 @@ final class EventTapEngine {
     private var spaceDragReverse = false
     private var captureMode = false
     private var mappingsByButton: [Int: RemapAction] = [:]
+    private var pendingDragCancel = false // set on wake/device-change, consumed on the tap thread
 
     /// Source for the fresh wheel events we post to reverse Standard-mode scrolling (see below).
     private let scrollSource = CGEventSource(stateID: .hidSystemState)
@@ -82,6 +83,15 @@ final class EventTapEngine {
     private func handleDeviceChange() {
         reEnableTap()
         scrollAnimator.endGestureNow()
+        requestDragCancel()
+    }
+
+    /// The Space-drag button's up can be lost across sleep or a device disconnect, leaving the
+    /// gesture stuck `down` (it would then swallow every drag and fire spurious Space switches).
+    /// The gesture's state is tap-thread-only, so don't touch it here — raise a flag the tap
+    /// callback consumes at the top of its next event.
+    private func requestDragCancel() {
+        lock.lock(); pendingDragCancel = true; lock.unlock()
     }
 
     /// Watch for mice connecting/disconnecting via IOKit. Device matching/removal notifications need no
@@ -115,6 +125,7 @@ final class EventTapEngine {
     @objc func handleWake() {
         reEnableTap()
         scrollAnimator.handleWake()
+        requestDragCancel()
     }
 
     /// Re-enable the tap if macOS disabled it (e.g. across sleep/wake). Safe to call from any thread
@@ -186,7 +197,10 @@ final class EventTapEngine {
         }
         let tap = created!
         self.tap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            NSLog("QmouseFix: failed to create run-loop source for the event tap") // would trap below
+            return
+        }
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         CFRunLoopRun()
@@ -210,10 +224,14 @@ final class EventTapEngine {
         let lines = scrollLines
         let accelerate = scrollAcceleration
         let smoothHiRes = smoothHighRes
+        let dragCancel = pendingDragCancel
+        pendingDragCancel = false
         spaceDrag.button = spaceDragButton
         spaceDrag.threshold = spaceDragThreshold
         spaceDrag.reverse = spaceDragReverse
         lock.unlock()
+
+        if dragCancel { spaceDrag.cancel() } // tap thread — safe to touch the gesture's state
 
         // During capture, let button events reach the Settings UI untouched.
         if capturing {
@@ -310,7 +328,8 @@ final class EventTapEngine {
                 // in Standard). So build a FRESH reversed wheel event carrying the negated line, pixel
                 // and fixed-point deltas, tag it so our tap skips it, post it, and swallow the original.
                 guard let rev = CGEvent(scrollWheelEvent2Source: scrollSource, units: .line,
-                                        wheelCount: 2, wheel1: Int32(lineV), wheel2: Int32(lineH),
+                                        wheelCount: 2, wheel1: int32Clamped(lineV),
+                                        wheel2: int32Clamped(lineH),
                                         wheel3: 0) else { return Unmanaged.passUnretained(event) }
                 rev.setIntegerValueField(.scrollWheelEventPointDeltaAxis1,
                     value: -event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
@@ -355,9 +374,18 @@ extension EventTapEngine {
 }
 
 /// Scale an integer scroll field in place (rounded). Used for continuous-mouse speed/reverse.
+/// Clamped before converting: the tap sees every process's synthetic scroll events, and a huge or
+/// non-finite delta in one of them would trap the `Int64(_:)` conversion and crash the whole app.
 private func scaleInt(_ event: CGEvent, _ field: CGEventField, _ factor: Double) {
-    let scaled = Double(event.getIntegerValueField(field)) * factor
-    event.setIntegerValueField(field, value: Int64(scaled.rounded()))
+    let scaled = (Double(event.getIntegerValueField(field)) * factor).rounded()
+    let safe = scaled.isFinite ? min(max(scaled, -1e15), 1e15) : 0
+    event.setIntegerValueField(field, value: Int64(safe))
+}
+
+/// Convert a (possibly foreign/corrupt) event delta to Int32 without trapping.
+private func int32Clamped(_ v: Double) -> Int32 {
+    guard v.isFinite else { return 0 }
+    return Int32(min(max(v, -2_147_483_647), 2_147_483_647))
 }
 
 /// Scale a fixed-point (double) scroll field in place.

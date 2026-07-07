@@ -47,6 +47,18 @@ final class SpaceDragGesture {
 
     var isActive: Bool { down }
 
+    /// Abandon any in-flight press/drag WITHOUT firing actions. Needed after sleep/wake or a device
+    /// disconnect: the button-up may have happened while we couldn't see it, and a stale `down`
+    /// would swallow every later drag and fire spurious Space switches. Tap-thread only, like the
+    /// rest of the state.
+    func cancel() {
+        down = false
+        dragged = false
+        axis = .undecided
+        accX = 0; accY = 0
+        smoothedVel = 0
+    }
+
     /// Begin tracking a press of the gesture button. Returns true if this button is ours (caller
     /// should then swallow the button-down).
     func handleButtonDown(_ buttonNumber: Int) -> Bool {
