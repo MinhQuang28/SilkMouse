@@ -47,21 +47,26 @@ or any system configuration changes.
 > That warning is expected; the steps below get past it. If you'd rather not trust a pre-built
 > binary, build from source instead (no Gatekeeper steps needed).
 
-### Option 1 — Download the pre-built app
+### Option 1 — Download the pre-built app (3 steps)
 
-1. Download `SilkMouse.zip` from the
-   [latest release](https://github.com/MinhQuang28/SilkMouse/releases), unzip it, and move
-   `SilkMouse.app` into `/Applications`.
-2. Clear the Gatekeeper quarantine flag (a downloaded, non-notarized app won't open without it):
+**Step 1 — Install.** Download `SilkMouse.zip` from the
+[latest release](https://github.com/MinhQuang28/SilkMouse/releases), unzip it, and drag
+`SilkMouse.app` into your **Applications** folder.
 
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/SilkMouse.app
-   ```
+**Step 2 — Unblock.** Clear the Gatekeeper quarantine flag (one-time; a downloaded,
+non-notarized app won't open without it):
 
-   Or the UI route: double-click the app once (macOS blocks it), then System Settings →
-   Privacy & Security → scroll down → **Open Anyway**.
-3. Launch it and grant **Accessibility** access: System Settings → Privacy & Security →
-   Accessibility → enable SilkMouse.
+```sh
+xattr -dr com.apple.quarantine /Applications/SilkMouse.app
+```
+
+Not comfortable with Terminal? Instead: double-click the app once (macOS blocks it), then
+System Settings → Privacy & Security → scroll down → **Open Anyway** → open the app again.
+
+**Step 3 — Open & grant access.** Launch SilkMouse from Applications and grant
+**Accessibility** when prompted (System Settings → Privacy & Security → Accessibility →
+enable SilkMouse). Done — the mouse icon appears in the menu bar; click it to configure
+scrolling and buttons.
 
 ### Option 2 — Build from source
 
