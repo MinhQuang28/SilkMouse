@@ -42,20 +42,28 @@ or any system configuration changes.
 
 ## Install
 
-### Homebrew (tap)
+> **Note for testers:** QmouseFix is currently signed with a **local (non-notarized) certificate**
+> — there is no Apple Developer ID behind it yet — so macOS will block the app on first launch.
+> That warning is expected; the steps below get past it. If you'd rather not trust a pre-built
+> binary, build from source instead (no Gatekeeper steps needed).
 
-```sh
-brew install --cask minhquang28/tap/qmousefix
-```
+### Option 1 — Download the pre-built app
 
-The build is signed with a local (non-notarized) certificate, so Gatekeeper quarantines it on
-first launch. Clear the flag once after install:
+1. Download `QmouseFix.zip` from the
+   [latest release](https://github.com/MinhQuang28/QmouseFix/releases), unzip it, and move
+   `QmouseFix.app` into `/Applications`.
+2. Clear the Gatekeeper quarantine flag (a downloaded, non-notarized app won't open without it):
 
-```sh
-xattr -dr com.apple.quarantine /Applications/QmouseFix.app
-```
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/QmouseFix.app
+   ```
 
-### Build from source
+   Or the UI route: double-click the app once (macOS blocks it), then System Settings →
+   Privacy & Security → scroll down → **Open Anyway**.
+3. Launch it and grant **Accessibility** access: System Settings → Privacy & Security →
+   Accessibility → enable QmouseFix.
+
+### Option 2 — Build from source
 
 Requires the Xcode (beta) Swift toolchain.
 
