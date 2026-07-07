@@ -1,7 +1,7 @@
 cask "qmousefix" do
-  version "0.2.0"
+  version "0.3.0"
   # version + sha256 are kept in sync by tools/package-release.sh on each build.
-  sha256 "90a7eca51097febbee020e8fab71cd46bad063097e10515232223295d907ed35"
+  sha256 "40a09bf51c17609ed388f2d82776c10b9cd697d0db65146cc7a51d43359bb15c"
 
   url "https://github.com/MinhQuang28/QmouseFix/releases/download/v#{version}/QmouseFix.zip"
   name "QmouseFix"
