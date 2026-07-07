@@ -91,7 +91,7 @@ Launch the app â€” it lives in the menu bar (no Dock icon). Open **Settings** (â
 # Run the test suite (config codec, button actions, scroll math)
 swift test
 
-# Package a release: build + zip + sha256 + patch the Homebrew cask (local only)
+# Package a release: build + zip + sha256 (local only)
 tools/package-release.sh
 
 # Same, and publish the GitHub release + upload the zip
@@ -104,7 +104,6 @@ tools/package-release.sh --publish
 |------|---------|
 | `Sources/QmouseFix/` | App source (event tap, scroll animator, settings UI, config) |
 | `Tests/QmouseFixTests/` | Unit tests |
-| `Casks/qmousefix.rb` | Homebrew cask |
 | `build-app.sh` | Assemble & sign the `.app` bundle |
 | `tools/setup-signing-cert.sh` | Create the stable local signing certificate |
 | `tools/package-release.sh` | Build, zip, hash, and (optionally) publish a release |
