@@ -110,5 +110,9 @@ tools/package-release.sh --publish
 
 ## License
 
-No formal license has been added yet. Mac Mouse Fix was used only as a behavioral reference;
-no source was copied from it.
+SilkMouse is **source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE.md):
+
+- ✅ Free for **personal, noncommercial use** — install it, read the source, modify it, build it yourself, share it for free.
+- ❌ **Commercial use is not permitted** — you may not copy this source into your own product, sell it, charge for access to it, or otherwise use it for commercial purposes without a separate license from the author.
+
+Copyright © Ha Minh Quang. Mac Mouse Fix was used only as a behavioral reference; no source was copied from it.
