@@ -71,6 +71,8 @@ final class ScrollAnimator: NSObject {
     private var displayLink: CADisplayLink?   // created/used only on the animator thread
     private var linkRunLoop: CFRunLoop?        // that thread's run loop, for cross-thread wake-ups
     private var thread: Thread?
+    private var linkDisplayID: CGDirectDisplayID = 0    // display the live link paces (0 = unknown)
+    private var pendingDisplayID: CGDirectDisplayID = 0 // display the NEXT link should pace
 
     // Scroll tuning — distance accumulator + critically-damped spring. Each notch ADDS a fixed
     // distance to the remaining target; the spring (see `springAdvance`) glides there with continuous
@@ -317,17 +319,58 @@ final class ScrollAnimator: NSObject {
         return (remaining - rem1, rem1, vel1)
     }
 
+    /// Display currently under the mouse pointer, via thread-safe CoreGraphics only (querying
+    /// AppKit's NSScreen off the main thread is unsupported — that resolution happens in `runLoop`).
+    private static func displayUnderCursor() -> CGDirectDisplayID {
+        guard let loc = CGEvent(source: nil)?.location else { return 0 }
+        var display: CGDirectDisplayID = 0
+        var count: UInt32 = 0
+        guard CGGetDisplaysWithPoint(loc, 1, &display, &count) == .success, count > 0 else { return 0 }
+        return display
+    }
+
+    /// Spawn the animator thread. Caller must hold `lock` (publishes `thread` before unlocking so a
+    /// concurrent wake can't double-spawn); caller starts the returned thread AFTER unlocking.
+    private func spawnLinkThreadLocked() -> Thread {
+        let t = Thread { [weak self] in self?.runLoop() }
+        t.name = "com.qmousefix.scroll-animator"
+        t.qualityOfService = .userInteractive
+        thread = t
+        return t
+    }
+
     /// Spin up the animator thread on first use, or un-pause its display link on later glides.
-    /// `thread`/`linkRunLoop` are read+written under `lock` so a failed start (see `runLoop`) can be
-    /// retried by the next tick without racing.
+    /// A glide starting on a DIFFERENT display than the link paces (mixed-refresh setups: 120 Hz
+    /// MBP + 60 Hz external) rebuilds the link for the cursor's display — glide state is preserved,
+    /// only the pacing clock changes. `thread`/`linkRunLoop` are read+written under `lock` so a
+    /// failed start (see `runLoop`) can be retried by the next tick without racing.
     private func startOrWake() {
+        let target = ScrollAnimator.displayUnderCursor()
         lock.lock()
         if thread == nil {
-            let t = Thread { [weak self] in self?.runLoop() }
-            t.name = "com.qmousefix.scroll-animator"
-            t.qualityOfService = .userInteractive
-            thread = t
+            pendingDisplayID = target
+            let t = spawnLinkThreadLocked()
             lock.unlock()
+            t.start()
+            return
+        }
+        // Retarget to the cursor's display. Only reached from idle (or a stalled link), so the old
+        // link isn't mid-glide — tear it down, keep rem/vel/running, spawn a replacement that
+        // drains the same state at the right refresh rate.
+        if target != 0, linkDisplayID != 0, target != linkDisplayID {
+            pendingDisplayID = target
+            let rl = linkRunLoop
+            let link = displayLink
+            displayLink = nil; linkRunLoop = nil; linkDisplayID = 0
+            let t = spawnLinkThreadLocked() // replaces `thread` → old thread's zombie guard trips
+            lock.unlock()
+            if let rl {
+                CFRunLoopPerformBlock(rl, CFRunLoopMode.commonModes.rawValue) {
+                    link?.invalidate()
+                    CFRunLoopStop(rl)
+                }
+                CFRunLoopWakeUp(rl)
+            }
             t.start()
             return
         }
@@ -355,6 +398,7 @@ final class ScrollAnimator: NSObject {
         displayLink = nil
         linkRunLoop = nil
         thread = nil
+        linkDisplayID = 0
         running = false
         remV = 0; remH = 0; carryV = 0; carryH = 0; velV = 0; velH = 0
         mode = .idle
@@ -384,7 +428,24 @@ final class ScrollAnimator: NSObject {
     }
 
     private func runLoop() {
-        guard let link = NSScreen.main?.displayLink(target: self, selector: #selector(step(_:))) else {
+        lock.lock()
+        let wantedDisplay = pendingDisplayID
+        lock.unlock()
+        // Resolve the NSScreen for the cursor's display ON THE MAIN THREAD (AppKit isn't safe
+        // off-main); fall back to the key screen when the lookup misses (cursor query failed,
+        // display just unplugged). Sync is safe here: no lock is held, and the main thread never
+        // blocks waiting on this thread.
+        let made: (link: CADisplayLink, display: CGDirectDisplayID)? = DispatchQueue.main.sync {
+            let screen = NSScreen.screens.first {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+                    .uint32Value == wantedDisplay
+            } ?? NSScreen.main
+            guard let screen else { return nil }
+            let actual = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                          as? NSNumber)?.uint32Value ?? 0
+            return (screen.displayLink(target: self, selector: #selector(step(_:))), actual)
+        }
+        guard let (link, actualDisplay) = made else {
             // No display right now (asleep / clamshell / switching). Reset so the NEXT tick retries
             // instead of leaving smooth scroll permanently dead.
             lock.lock()
@@ -408,6 +469,7 @@ final class ScrollAnimator: NSObject {
         }
         linkRunLoop = CFRunLoopGetCurrent()
         displayLink = link
+        linkDisplayID = actualDisplay
         lock.unlock()
         link.add(to: .current, forMode: .common)
         // A bare port keeps the run loop alive while the link is paused, so the thread survives idle.
@@ -499,8 +561,16 @@ final class ScrollAnimator: NSObject {
                 post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH,
                      gesturePhase: 0, momentumPhase: hadBegun ? momentumContinue : momentumBegan)
             } else {
+                // Real trackpads open a gesture with an EMPTY began frame; deltas arrive in
+                // `changed` frames. Some apps discard began's delta outright, which would eat the
+                // first frame of every gesture (a small hitch at each start). So: began(0,0) and
+                // the delta as `changed`, posted back-to-back in the same frame — no lost motion,
+                // no added latency. (Momentum began carries its delta, matching real hardware.)
+                if !hadBegun {
+                    post(intV: 0, intH: 0, preciseV: 0, preciseH: 0, gesturePhase: phaseBegan)
+                }
                 post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH,
-                     gesturePhase: hadBegun ? phaseChanged : phaseBegan)
+                     gesturePhase: phaseChanged)
             }
         }
     }
