@@ -81,13 +81,16 @@ struct SettingsView: View {
                 ForEach(3...9, id: \.self) { Text("Button \($0)").tag($0) }
             }
             if store.config.spaceDragButton != 0 {
-                VStack(alignment: .leading) {
-                    Text("Drag distance per Space: \(Int(store.config.spaceDragThreshold)) px")
-                    Slider(value: $store.config.spaceDragThreshold, in: 100...400, step: 10)
+                Toggle("Follow-finger animation", isOn: $store.config.spaceDragFollowFinger)
+                if !store.config.spaceDragFollowFinger {
+                    VStack(alignment: .leading) {
+                        Text("Drag distance per Space: \(Int(store.config.spaceDragThreshold)) px")
+                        Slider(value: $store.config.spaceDragThreshold, in: 100...400, step: 10)
+                    }
                 }
                 Toggle("Reverse drag direction", isOn: $store.config.spaceDragReverse)
             }
-            Text("Hold the chosen button and drag left/right to switch Spaces — one jump per drag distance. (macOS 26+ only supports discrete jumps, not a smooth follow-finger animation.)")
+            Text("Hold the chosen button and drag left/right to switch Spaces. Follow-finger drives the real macOS slide (like a three-finger trackpad swipe); turn it off for discrete one-jump-per-distance switching. Vertical drags trigger Mission Control (up) or App Exposé (down). On macOS 27+ discrete jumps are used regardless, until follow-finger is ported.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)

@@ -34,8 +34,10 @@ struct AppConfig: Codable, Sendable {
     var smoothHighRes: Bool = false     // also smooth high-res "continuous" mice (e.g. Keychron M6) that
                                         // lack a flywheel; keep off for MX-Master-style free-spin mice
     var spaceDragButton: Int = 0        // 0 = off; else button held to drag-switch Spaces
-    var spaceDragThreshold: Double = 200 // pixels of horizontal drag per Space switch
+    var spaceDragThreshold: Double = 200 // pixels of horizontal drag per Space switch (discrete mode)
     var spaceDragReverse: Bool = false  // flip drag direction ↔ Space direction
+    var spaceDragFollowFinger: Bool = true // drive the real Space-slide (trackpad-like) when the
+                                           // OS supports it; off = discrete one-jump-per-distance
     var mappings: [ButtonMapping] = AppConfig.defaultMappings
 
     /// Sensible defaults so the app is useful on first launch.
@@ -51,7 +53,7 @@ extension AppConfig {
     enum CodingKeys: String, CodingKey {
         case enabled, reverseScroll, scrollMode, smoothScroll, scrollSpeed, scrollLines
         case scrollAcceleration, smoothHighRes
-        case spaceDragButton, spaceDragThreshold, spaceDragReverse, mappings
+        case spaceDragButton, spaceDragThreshold, spaceDragReverse, spaceDragFollowFinger, mappings
     }
 
     init(from decoder: Decoder) throws {
@@ -72,6 +74,7 @@ extension AppConfig {
         spaceDragButton    = try c.decodeIfPresent(Int.self,             forKey: .spaceDragButton)    ?? spaceDragButton
         spaceDragThreshold = try c.decodeIfPresent(Double.self,          forKey: .spaceDragThreshold) ?? spaceDragThreshold
         spaceDragReverse   = try c.decodeIfPresent(Bool.self,            forKey: .spaceDragReverse)   ?? spaceDragReverse
+        spaceDragFollowFinger = try c.decodeIfPresent(Bool.self,       forKey: .spaceDragFollowFinger) ?? spaceDragFollowFinger
         mappings           = try c.decodeIfPresent([ButtonMapping].self, forKey: .mappings)          ?? mappings
     }
 
@@ -88,6 +91,7 @@ extension AppConfig {
         try c.encode(spaceDragButton, forKey: .spaceDragButton)
         try c.encode(spaceDragThreshold, forKey: .spaceDragThreshold)
         try c.encode(spaceDragReverse, forKey: .spaceDragReverse)
+        try c.encode(spaceDragFollowFinger, forKey: .spaceDragFollowFinger)
         try c.encode(mappings, forKey: .mappings)
     }
 }

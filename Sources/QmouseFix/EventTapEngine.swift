@@ -27,6 +27,7 @@ final class EventTapEngine {
     private var spaceDragButton = 0
     private var spaceDragThreshold = 200.0
     private var spaceDragReverse = false
+    private var spaceDragFollowFinger = true
     private var captureMode = false
     private var mappingsByButton: [Int: RemapAction] = [:]
     private var pendingDragCancel = false // set on wake/device-change, consumed on the tap thread
@@ -164,6 +165,7 @@ final class EventTapEngine {
         spaceDragButton = config.spaceDragButton
         spaceDragThreshold = config.spaceDragThreshold
         spaceDragReverse = config.spaceDragReverse
+        spaceDragFollowFinger = config.spaceDragFollowFinger
         mappingsByButton = Dictionary(config.mappings.map { ($0.buttonNumber, $0.action) },
                                       uniquingKeysWith: { first, _ in first })
         lock.unlock()
@@ -229,6 +231,7 @@ final class EventTapEngine {
         spaceDrag.button = spaceDragButton
         spaceDrag.threshold = spaceDragThreshold
         spaceDrag.reverse = spaceDragReverse
+        spaceDrag.followFinger = spaceDragFollowFinger
         lock.unlock()
 
         if dragCancel { spaceDrag.cancel() } // tap thread — safe to touch the gesture's state

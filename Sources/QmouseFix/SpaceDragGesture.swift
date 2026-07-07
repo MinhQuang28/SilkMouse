@@ -9,19 +9,27 @@ import QuartzCore
 /// reported back to the engine so it fires the button's mapped action; a click-and-drag does the
 /// gesture instead. So one button can be e.g. Mission Control on click, switch Spaces on drag.
 ///
-/// Switching is driven through the Symbolic-HotKey SPI (`SystemActions`), so it works even if the
-/// user disabled the system Space-switch keyboard shortcut. macOS 26+ blocks synthetic dock-swipe
-/// gestures in WindowServer, so discrete jumps (not follow-finger) are the supported behaviour —
-/// the same conclusion Mac Mouse Fix reached. A fast flick on release fires one extra jump for the
-/// momentum feel of the real gesture.
+/// Horizontal drags drive the REAL WindowServer Space-slide via synthesized dock-swipe events
+/// (`DockSwipeSynthesizer`), so the transition follows the pointer like a three-finger trackpad
+/// swipe. Discrete Symbolic-HotKey jumps (`SystemActions`) remain the fallback — when the user
+/// turns follow-finger off, or on macOS 27+ where field-based dock-swipe synthesis no longer works
+/// (WindowServer reads an attached IOHIDEvent instead; not ported yet). Vertical drags stay
+/// discrete (Mission Control / App Exposé are toggles, not slides). In discrete mode a fast flick
+/// on release fires one extra jump for momentum feel; follow-finger gets that natively via the
+/// swipe's exit speed.
 ///
 /// State here is touched only on the event-tap thread; the public knobs are set from the same
 /// thread at the top of each callback, so no locking is needed.
 final class SpaceDragGesture {
 
     var button = 0          // 0 = disabled, else the 1-based button that triggers the gesture
-    var threshold = 200.0   // pixels of horizontal drag per Space switch
+    var threshold = 200.0   // pixels of horizontal drag per Space switch (discrete mode)
     var reverse = false     // flip which horizontal direction maps to which Space
+    var followFinger = true // drive the real Space-slide transition when the OS supports it
+
+    private let dockSwipe = DockSwipeSynthesizer()
+    private var followingFinger = false // this drag is driving a live dock-swipe transition
+    private var swipeScale = 0.0        // originOffset per pixel, computed once per drag
 
     private let deadzone = 6.0           // px of movement before a press counts as a drag (not a click)
     private let hCooldown = 0.30         // s between Space switches — roughly the slide-animation duration
@@ -52,8 +60,13 @@ final class SpaceDragGesture {
     /// would swallow every later drag and fire spurious Space switches. Tap-thread only, like the
     /// rest of the state.
     func cancel() {
+        if followingFinger {
+            // Abort the live transition too, or WindowServer is left holding a half-slid Space.
+            dockSwipe.post(delta: 0, type: .horizontal, phase: .cancelled)
+        }
         down = false
         dragged = false
+        followingFinger = false
         axis = .undecided
         accX = 0; accY = 0
         smoothedVel = 0
@@ -65,6 +78,7 @@ final class SpaceDragGesture {
         guard button != 0, buttonNumber == button else { return false }
         down = true
         dragged = false
+        followingFinger = false // stale carry-over (a lost button-up) must not leak into this drag
         axis = .undecided
         accX = 0; accY = 0
         smoothedVel = 0
@@ -75,10 +89,23 @@ final class SpaceDragGesture {
     /// click with no drag, so the engine should fire the button's normal remap action.
     func handleButtonUp(_ buttonNumber: Int) -> (consumed: Bool, wasClick: Bool) {
         guard down, buttonNumber == button else { return (false, false) }
-        if dragged { flickOnRelease() }
+        if followingFinger {
+            // Release the live transition; the synthesizer completes or snaps back (and carries
+            // the exit momentum) based on the final movement direction.
+            dockSwipe.post(delta: 0, type: .horizontal, phase: .ended)
+        } else if dragged {
+            flickOnRelease()
+        }
         let wasClick = !dragged
         down = false
+        followingFinger = false
         return (true, wasClick)
+    }
+
+    /// Pixel movement → signed swipe progress. The negation matches the trackpad convention (drag
+    /// left → next Space on the right); `reverse` flips it, same as in discrete mode.
+    private func swipeDelta(_ deltaX: Double) -> Double {
+        (reverse ? deltaX : -deltaX) * swipeScale
     }
 
     /// Returns true if a drag was consumed (the gesture button is held).
@@ -93,6 +120,13 @@ final class SpaceDragGesture {
             if max(abs(accX), abs(accY)) >= deadzone {
                 dragged = true
                 axis = abs(accX) >= abs(accY) ? .horizontal : .vertical
+                if axis == .horizontal, followFinger, DockSwipeSynthesizer.isSupported {
+                    followingFinger = true
+                    swipeScale = DockSwipeSynthesizer.horizontalScale()
+                    // Open the swipe with the deadzone's accumulated movement so the transition
+                    // starts exactly where the pointer already is — no dead first millimeters.
+                    dockSwipe.post(delta: swipeDelta(accX), type: .horizontal, phase: .began)
+                }
                 accX = 0; accY = 0
                 lastDragTime = now
             }
@@ -106,7 +140,11 @@ final class SpaceDragGesture {
         if dt > 0, dt < 0.5 { smoothedVel = 0.7 * smoothedVel + 0.3 * (axisDelta / dt) }
 
         if axis == .horizontal {
-            if now - lastHSwitch < hCooldown {
+            if followingFinger {
+                // Follow-finger: every pixel drives the live transition; thresholds/cooldowns are
+                // discrete-mode concepts. The OS handles per-Space snapping and momentum itself.
+                dockSwipe.post(delta: swipeDelta(deltaX), type: .horizontal, phase: .changed)
+            } else if now - lastHSwitch < hCooldown {
                 accX = 0 // discard motion during the cooldown so one hard swipe = exactly one Space
             } else {
                 accX += deltaX
