@@ -46,8 +46,11 @@ struct SettingsView: View {
             }
             if store.config.scrollMode == .smooth {
                 VStack(alignment: .leading) {
-                    Text("Scroll speed: \(String(format: "%.1f×", store.config.scrollSpeed))")
-                    Slider(value: $store.config.scrollSpeed, in: 0.2...1.5, step: 0.1) {
+                    Text("Scroll speed: \(String(format: "%.2f×", store.config.scrollSpeed))")
+                    // Floor of 0.05 (not 0.2): high-res "continuous" mice natively scroll fast, and
+                    // their gain is speed/0.5 — a 0.2 floor still meant 40% of native, too fast for
+                    // slow scrollers. 0.05 → 10% of native. Finer step for control at the low end.
+                    Slider(value: $store.config.scrollSpeed, in: 0.05...1.5, step: 0.05) {
                         Text("Scroll speed")
                     } minimumValueLabel: { Text("Slow").font(.caption) }
                       maximumValueLabel: { Text("Fast").font(.caption) }

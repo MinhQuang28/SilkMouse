@@ -34,14 +34,36 @@ ScrollAnimator.swift:89-92 — `dir` = sign of dominant axis only; vertical +1 t
 ### B4 [LOW] Stale header doc
 ScrollAnimator.swift:5-13 — header describes impulse+velocity-decay model and says both accelerators "disabled in current profile"; actual code is distance-accumulator with active accel toggle. Doc rot → misleads future maintenance.
 
+### B6 [MED] ~1s dead scroll after idle (App Nap) — ✅ FIXED 260707
+User-reported: "sometimes scrolling only starts working ~1s later." Ticks were consumed (tap alive)
+but no frames fired. Root cause: windowless LSUIElement agent held NO NSProcessInfo activity →
+App Nap coalesces the napped process's run-loop timers to ~1 s, delaying the display-link wake
+after an idle period. Fix (two layers):
+1. `beginActivity([.userInitiatedAllowingIdleSystemSleep, .latencyCritical])` held for app lifetime
+   (QmouseFixApp.swift) — exempts from App Nap/timer coalescing without ever blocking system sleep.
+2. Stall watchdog in the input path (ScrollAnimator.wakeActionLocked): a tick arriving while
+   `running` but no step() for >0.25 s re-issues the wake; 3 failed windows → full link rebuild.
+   Converts ANY residual stranded-link race from "dead until Space switch" into "heals on next tick".
+Also closed a pre-existing spawn race: handleWake during link-thread startup could leave a zombie
+thread publishing a second live display link (double-rate scroll); runLoop() now bows out if
+`thread !== Thread.current`.
+Residual: if the delay persists identically under MMF too, it's the wireless mouse's own radio
+power-save wake latency (hardware, not fixable in software).
+
 ### B5 [VERIFY] Modifier+scroll in smooth mode
 Synthetic events (post at cghidEventTap) usually inherit physically-held modifiers, so Shift+wheel (horizontal) / Ctrl+wheel (zoom) likely still work — but untested. Verify once; if broken, copy `event.flags` from original.
 
 ## Recommended fix order
 1. B1 race — ✅ FIXED 260707 (pause block re-checks running/phaseStarted/displayLink under lock; code-reviewer confirmed, also closes a 2nd strand path via handleWake rebuild)
 2. S3 targetTimestamp — ✅ FIXED 260707 (dt from link.targetTimestamp, clamped [0, 0.05]; confirmed)
-3. S1 spring model (the MMF feel gap)
-4. S2 momentum tail (pairs with S1)
+3. S1 spring model — ✅ FIXED 260707: exponential ease replaced by critically-damped spring
+   (closed-form, state = remaining+velocity; notch only moves target, velocity carries over →
+   ease-in-out, no per-notch pulsing, still exact-stop). omega: smooth 26 / step 40 / momentum 10.
+4. S2 momentum tail — ✅ FIXED 260707: gesture→momentum handoff state machine; flick detector =
+   input silence >0.10s + last inter-tick gap <0.08s + speed>350px/s + backlog@last-tick >100px
+   (pure `shouldStartMomentum`, unit-tested). Coast emitted as momentum-phase events (field 123)
+   with softer spring; total distance unchanged; steady slow ticking never coasts (exact stop).
+   B3 (cross-axis accel) + B4 (stale header doc) fixed in the same pass.
 5. S4 cursor-screen display link
 6. B2 verify on hardware, then fix or fix comment
 7. S5/B3/B4 cleanups

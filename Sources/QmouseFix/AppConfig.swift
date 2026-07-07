@@ -28,7 +28,7 @@ struct AppConfig: Codable, Sendable {
     var enabled: Bool = true
     var reverseScroll: Bool = false
     var scrollMode: ScrollMode = .smooth
-    var scrollSpeed: Double = 0.5       // 0.2 (slow) … 1.5 (fast); scales smooth-scroll momentum
+    var scrollSpeed: Double = 0.5       // 0.05 (slowest) … 1.5 (fast); scales smooth-scroll momentum
     var scrollLines: Int = 3            // lines per notch in Smooth-step mode (Windows default = 3)
     var scrollAcceleration: Bool = true // rapid consecutive notches scroll farther (Smooth mode only)
     var smoothHighRes: Bool = false     // also smooth high-res "continuous" mice (e.g. Keychron M6) that
