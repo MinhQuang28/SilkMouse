@@ -159,8 +159,22 @@ final class ScrollAnimator: NSObject {
         // as step()/post() — so touching `post()` and `displayLink` here is single-threaded and safe.
         CFRunLoopPerformBlock(rl, CFRunLoopMode.commonModes.rawValue) { [weak self] in
             guard let self else { return }
-            self.post(intV: 0, intH: 0, preciseV: 0, preciseH: 0, phase: self.phaseEnded)
-            self.displayLink?.isPaused = true
+            // Re-check state under lock: a tick can slip in between endGestureNow's unlock and
+            // this block being enqueued. That tick sees running == false, sets it true and
+            // enqueues an un-pause block — which then runs BEFORE this one (enqueue order), so
+            // pausing unconditionally here would strand the link paused while running == true.
+            // Every later tick would see wasIdle == false and never wake the link again → smooth
+            // scroll dead until the next Space/app switch. So: pause only while still idle. (A
+            // tick landing after this check enqueues its un-pause behind us — still awake.)
+            // Likewise, if the new gesture already emitted its `began`, posting `ended` now would
+            // spuriously close it mid-flight — skip it; the old gesture is abandoned either way.
+            self.lock.lock()
+            let newGestureBegan = self.phaseStarted
+            let stillIdle = !self.running
+            let link = self.displayLink // read under lock (handleWake/runLoop write it)
+            self.lock.unlock()
+            if !newGestureBegan { self.post(intV: 0, intH: 0, preciseV: 0, preciseH: 0, phase: self.phaseEnded) }
+            if stillIdle { link?.isPaused = true }
         }
         CFRunLoopWakeUp(rl)
     }
@@ -244,8 +258,12 @@ final class ScrollAnimator: NSObject {
     /// accumulated target), then pause the link when settled.
     @objc private func step(_ link: CADisplayLink) {
         lock.lock()
-        let now = CACurrentMediaTime()
-        let dt = min(now - lastTime, 0.05) // clamp after any stall so we don't lurch
+        // Animation clock = the frame's presentation time (targetTimestamp), not wall-clock at
+        // callback dispatch: dispatch latency jitters while frames present exactly on vsync, so a
+        // wall-clock dt wobbles the per-frame delta → visible micro-judder. Same mach timebase as
+        // CACurrentMediaTime(), so mixing with the seed from addTick/addPixels is safe.
+        let now = link.targetTimestamp
+        let dt = min(max(now - lastTime, 0), 0.05) // clamp: no negative dt, no lurch after a stall
         lastTime = now
 
         // Frame-rate-independent ease: take a fraction of what's left so the per-frame delta tapers
