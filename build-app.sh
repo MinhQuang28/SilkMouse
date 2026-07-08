@@ -8,7 +8,7 @@ SWIFT="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
 
 APP_NAME="SilkMouse"
 BUNDLE_ID="com.silkmouse.app"
-VERSION="0.4.0"
+VERSION="0.5.0"
 OUT="build/${APP_NAME}.app"
 
 echo "==> swift build -c release"

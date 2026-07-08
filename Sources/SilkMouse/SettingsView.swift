@@ -70,6 +70,9 @@ struct SettingsView: View {
             }
             Text("Standard = instant wheel (no animation). Smooth = trackpad-style momentum. Smooth-step = Windows-browser feel: each notch eases a fixed number of lines with no coast. Applies to a physical mouse wheel only — trackpad scrolling is left untouched.")
                 .font(.caption).foregroundStyle(.secondary)
+            if store.config.scrollMode != .standard {
+                ExcludedAppsView()
+            }
         }
         .formStyle(.grouped)
     }

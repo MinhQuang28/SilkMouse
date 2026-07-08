@@ -29,6 +29,7 @@ final class EventTapEngine {
     private var spaceDragReverse = false
     private var spaceDragFollowFinger = true
     private var captureMode = false
+    private var excludedBundleIDs: Set<String> = []
     private var mappingsByButton: [Int: RemapAction] = [:]
     private var pendingDragCancel = false // set on wake/device-change, consumed on the tap thread
 
@@ -38,6 +39,7 @@ final class EventTapEngine {
     /// Smooth scrolling + drag-to-switch-Spaces; only ever touched on the tap thread.
     private let scrollAnimator = ScrollAnimator()
     private let spaceDrag = SpaceDragGesture()
+    private let cursorApp = CursorAppResolver() // tap-thread only, like the animator
 
     /// Start the tap thread (idempotent). Apply `config`.
     func start(config: AppConfig) {
@@ -166,6 +168,7 @@ final class EventTapEngine {
         spaceDragThreshold = config.spaceDragThreshold
         spaceDragReverse = config.spaceDragReverse
         spaceDragFollowFinger = config.spaceDragFollowFinger
+        excludedBundleIDs = Set(config.excludedBundleIDs)
         mappingsByButton = Dictionary(config.mappings.map { ($0.buttonNumber, $0.action) },
                                       uniquingKeysWith: { first, _ in first })
         lock.unlock()
@@ -226,6 +229,7 @@ final class EventTapEngine {
         let lines = scrollLines
         let accelerate = scrollAcceleration
         let smoothHiRes = smoothHighRes
+        let excluded = excludedBundleIDs
         let dragCancel = pendingDragCancel
         pendingDragCancel = false
         spaceDrag.button = spaceDragButton
@@ -288,6 +292,15 @@ final class EventTapEngine {
 
             let isContinuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
 
+            // Excluded app under the cursor (scroll targets the window under the pointer, not the
+            // focused app): bypass the animator so the wheel event stays a genuine legacy notch.
+            // That keeps AppKit's vertical→horizontal transposition alive in horizontal-only views
+            // (Nimble Commander's Brief panels…), which our synthetic trackpad-style stream — being
+            // a phase-tagged gesture — would defeat. Reverse and the continuous-mouse speed slider
+            // still apply; only the smoothing is skipped.
+            let excludeSmoothing = !excluded.isEmpty
+                && cursorApp.bundleID(at: event.location).map(excluded.contains) == true
+
             // High-resolution / free-spin mice (e.g. MX Master 3) report continuous pixel deltas and,
             // on free-spin, the hardware flywheel coasts on its own. The OS already renders these
             // smoothly, so running them through our momentum engine would fight the flywheel and feel
@@ -298,7 +311,7 @@ final class EventTapEngine {
                 // choppily because the OS adds no momentum. When the user opts in, route their pixel
                 // deltas through the same ease-to-target animator that smooths the notch path. Free-spin
                 // mice (MX Master 3) should leave this OFF so we don't fight their hardware flywheel.
-                let animated = (mode == .smooth || mode == .smoothStep)
+                let animated = (mode == .smooth || mode == .smoothStep) && !excludeSmoothing
                 if smoothHiRes, animated {
                     let dir = reverse ? -1.0 : 1.0
                     let pxV = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * dir
@@ -318,7 +331,7 @@ final class EventTapEngine {
 
             // Notched mouse: Smooth and Smooth-step both drive the animator (momentum vs crisp N-line
             // step); Standard falls through to raw passthrough below.
-            let animated = (mode == .smooth || mode == .smoothStep)
+            let animated = (mode == .smooth || mode == .smoothStep) && !excludeSmoothing
             if animated, lineV != 0 || lineH != 0 {
                 scrollAnimator.addTick(lineV: lineV, lineH: lineH, speed: speed,
                                        stepped: mode == .smoothStep, lines: lines, accelerate: accelerate)
