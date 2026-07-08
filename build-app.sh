@@ -3,8 +3,22 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
-SWIFT="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+
+# Use regular Xcode, fall back to Xcode-beta if needed
+if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+elif [ -d "/Applications/Xcode-beta.app/Contents/Developer" ]; then
+    export DEVELOPER_DIR="/Applications/Xcode-beta.app/Contents/Developer"
+else
+    export DEVELOPER_DIR="${DEVELOPER_DIR:-.}"
+fi
+
+# Try to find swift executable
+if [ -f "$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift" ]; then
+    SWIFT="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+else
+    SWIFT="$(which swift)" || { echo "Error: swift not found in PATH or Xcode"; exit 1; }
+fi
 
 APP_NAME="SilkMouse"
 BUNDLE_ID="com.silkmouse.app"
@@ -34,7 +48,7 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
-    <key>LSMinimumSystemVersion</key><string>15.0</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>SilkMouse</string>
 </dict>
