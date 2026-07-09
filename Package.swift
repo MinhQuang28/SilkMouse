@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SilkMouse",
-    platforms: [.macOS(.v15)], // macOS 15+ only — lets us use modern APIs and drop legacy compat
+    platforms: [.macOS(.v14)], // macOS 14+ — supports Sonoma and newer
     targets: [
         .executableTarget(
             name: "SilkMouse",
