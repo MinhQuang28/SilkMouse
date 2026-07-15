@@ -424,4 +424,24 @@ final class MMFScrollMathTests: XCTestCase {
         XCTAssertTrue(a.feed(now: 10, direction: 1).isSequenceStart)
         XCTAssertFalse(a.feed(now: 10.03, direction: 1).isSequenceStart)
     }
+
+    /// Swipe chaining follows the profile's window: floaty (0.6 s / 12 ticks-per-s) chains bursts
+    /// that snappy/balanced (0.375 s / 16) would reset — MMF's per-curve chaining forgiveness.
+    func testAnalyzerSwipeWindowPerProfile() {
+        func swipes(maxInterval: Double, minTickSpeed: Double) -> Double {
+            var a = MMFTickAnalyzer()
+            var t = 10.0, s = 0.0
+            for _ in 0..<3 { // three 7-tick bursts, 0.5 s between burst starts
+                for _ in 0..<7 {
+                    s = a.feed(now: t, direction: 1,
+                               swipeMaxInterval: maxInterval, swipeMinTickSpeed: minTickSpeed).swipes
+                    t += 0.02
+                }
+                t += 0.5 - 7 * 0.02
+            }
+            return s
+        }
+        XCTAssertGreaterThanOrEqual(swipes(maxInterval: 0.6, minTickSpeed: 12), 2)
+        XCTAssertEqual(swipes(maxInterval: 0.375, minTickSpeed: 16), 0)
+    }
 }

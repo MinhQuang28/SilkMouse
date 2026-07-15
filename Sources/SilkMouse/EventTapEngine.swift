@@ -328,6 +328,9 @@ final class EventTapEngine {
             // Cmd+scroll → real pinch zoom (works wherever a trackpad pinch works). Consumes the
             // wheel event entirely; the pinch ends itself after a short quiet period.
             if modZoom {
+                // A pinch and a glide at once is disorienting — stop any in-flight coast first
+                // (idempotent no-op when nothing is gliding).
+                scrollAnimator.endGestureNow()
                 let dir = reverse ? -1.0 : 1.0
                 let mag: Double
                 if isContinuous {

@@ -2,8 +2,8 @@ import AppKit
 import CoreGraphics
 import QuartzCore
 
-/// Smooth scrolling with Mac Mouse Fix's scroll model (v3 "Regular" smoothness / LowInertia —
-/// snappy, short inertia tail), which is the feel this app targets in Smooth mode.
+/// Smooth scrolling with Mac Mouse Fix's scroll model (v3), tunable via the Smoothness setting
+/// (Snappy / Balanced / Floaty profiles) and the precise/quick scroll modifiers.
 ///
 /// Smooth mode (wheel notches): every notch re-plans ONE glide (`MMFHybridPlan`, see
 /// MMFScrollMath.swift): tick rate → px for this notch (acceleration curve), + the previous glide's
@@ -194,7 +194,9 @@ final class ScrollAnimator: NSObject {
         if mode == .momentum { momentumInterrupted = true; mode = .gesture; phaseStarted = false }
 
         // Tick rate → px for this notch; chained fast swipes multiply it (MMF fast scroll).
-        let analysis = mmfAnalyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2))
+        let analysis = mmfAnalyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2),
+                                        swipeMaxInterval: profile.swipeMaxInterval,
+                                        swipeMinTickSpeed: profile.swipeMinTickSpeed)
         var px = MMFScrollTuning.pxPerTick(tickHz: analysis.tickHz, minSens: minSens, maxSens: maxSens)
         if accelerate, let speedup = profile.speedup { px *= speedup.factor(swipes: analysis.swipes) }
 
