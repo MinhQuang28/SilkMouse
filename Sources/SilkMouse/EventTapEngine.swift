@@ -38,6 +38,12 @@ final class EventTapEngine {
     /// Source for the fresh wheel events we post to reverse Standard-mode scrolling (see below).
     private let scrollSource = CGEventSource(stateID: .hidSystemState)
 
+    /// Fractional line-delta carry for `postContinuous` (1 line ≈ 10 px). Without it, slow hi-res
+    /// scrolls (< 10 px/event) would truncate to 0 lines on every event and terminals in
+    /// mouse-reporting mode would never move. Only touched on the tap thread.
+    private var contLineCarryV = 0.0
+    private var contLineCarryH = 0.0
+
     /// Smooth scrolling + drag-to-switch-Spaces; only ever touched on the tap thread.
     private let scrollAnimator = ScrollAnimator()
     private let magnifier = MagnifySynthesizer()
@@ -371,14 +377,15 @@ final class EventTapEngine {
                         return nil // swallow; the animator drives the pixel scroll
                     }
                 }
-                if transpose {
-                    // Un-animated continuous event with swapped axes: in-place field edits are not
-                    // honored on passthrough (macOS re-reads the original deltas), so post a fresh
-                    // tagged event and swallow the original. Slider gain + reverse fold in here.
-                    postTransposedContinuous(event, speed: speed, reverse: reverse)
+                // Any modification (slider gain, reverse, axis swap) must go out as a FRESH
+                // tagged event: in-place field edits are not honored on passthrough (macOS
+                // re-reads the original deltas — the same reason Standard-mode reverse posts
+                // fresh events). Neutral settings pass the original through untouched.
+                let gain = (speed / 0.5) * (reverse ? -1.0 : 1.0)
+                if transpose || gain != 1.0 {
+                    postContinuous(event, gain: gain, transpose: transpose)
                     return nil
                 }
-                applyContinuous(event, speed: speed, reverse: reverse)
                 return Unmanaged.passUnretained(event)
             }
 
@@ -468,49 +475,37 @@ extension EventTapEngine {
         return Double(vertical ? CGDisplayPixelsHigh(display) : CGDisplayPixelsWide(display))
     }
 
-    /// Post a fresh continuous (pixel) event with the axes SWAPPED — for axis-swap apps when the
-    /// hi-res stream is not animated. Same fresh-event dance as Standard-mode reverse: in-place
-    /// edits on a passthrough don't stick. Slider gain and reverse fold into the same event.
-    fileprivate func postTransposedContinuous(_ event: CGEvent, speed: Double, reverse: Bool) {
-        let gain = (speed / 0.5) * (reverse ? -1.0 : 1.0)
-        let pV = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) * gain
-        let pH = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) * gain
-        let fV = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * gain
-        let fH = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * gain
+    /// Post a fresh continuous (pixel) event with the slider gain / reverse sign applied and the
+    /// axes optionally swapped — for the hi-res path whenever the original can't pass through
+    /// unmodified (in-place edits on a passthrough don't stick).
+    fileprivate func postContinuous(_ event: CGEvent, gain: Double, transpose: Bool) {
+        var pV = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) * gain
+        var pH = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) * gain
+        // Sanitize before any Int conversion: the tap sees every process's synthetic scroll
+        // events, and a huge or non-finite delta in one of them would trap `Int64(_:)` and
+        // crash the whole app. ±1e6 px/event is far beyond any real device.
+        var fV = sanitizedDelta(event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * gain)
+        var fH = sanitizedDelta(event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * gain)
+        if transpose { swap(&pV, &pH); swap(&fV, &fH) }
         guard let out = CGEvent(scrollWheelEvent2Source: scrollSource, units: .pixel, wheelCount: 2,
-                                wheel1: int32Clamped(pH), wheel2: int32Clamped(pV),
+                                wheel1: int32Clamped(pV), wheel2: int32Clamped(pH),
                                 wheel3: 0) else { return }
         out.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fH)
-        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fV)
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fV)
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fH)
         // Explicit line deltas (1 line ≈ 10 px) so terminals don't see a wheel line per event.
-        out.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64((fH / 10).rounded(.towardZero)))
-        out.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64((fV / 10).rounded(.towardZero)))
+        // Carried across events, like the animator's lineCarry: slow scrolls (< 10 px/event)
+        // must accumulate into whole lines or terminals would never move.
+        contLineCarryV += fV / 10
+        contLineCarryH += fH / 10
+        let lv = contLineCarryV.rounded(.towardZero); contLineCarryV -= lv
+        let lh = contLineCarryH.rounded(.towardZero); contLineCarryH -= lh
+        out.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lv))
+        out.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lh))
         out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
         out.flags = [] // modifiers already applied upstream (Shift = the swap itself)
         out.post(tap: .cghidEventTap)
     }
-
-    fileprivate func applyContinuous(_ event: CGEvent, speed: Double, reverse: Bool) {
-        let gain = (speed / 0.5) * (reverse ? -1.0 : 1.0)
-        if gain == 1.0 { return } // default speed, not reversed → leave the event untouched
-        scaleInt(event, .scrollWheelEventDeltaAxis1, gain)
-        scaleInt(event, .scrollWheelEventDeltaAxis2, gain)
-        scaleInt(event, .scrollWheelEventPointDeltaAxis1, gain)
-        scaleInt(event, .scrollWheelEventPointDeltaAxis2, gain)
-        // Fixed-point deltas are what AppKit actually reads for continuous scrolling.
-        scaleDouble(event, .scrollWheelEventFixedPtDeltaAxis1, gain)
-        scaleDouble(event, .scrollWheelEventFixedPtDeltaAxis2, gain)
-    }
-}
-
-/// Scale an integer scroll field in place (rounded). Used for continuous-mouse speed/reverse.
-/// Clamped before converting: the tap sees every process's synthetic scroll events, and a huge or
-/// non-finite delta in one of them would trap the `Int64(_:)` conversion and crash the whole app.
-private func scaleInt(_ event: CGEvent, _ field: CGEventField, _ factor: Double) {
-    let scaled = (Double(event.getIntegerValueField(field)) * factor).rounded()
-    let safe = scaled.isFinite ? min(max(scaled, -1e15), 1e15) : 0
-    event.setIntegerValueField(field, value: Int64(safe))
 }
 
 /// Convert a (possibly foreign/corrupt) event delta to Int32 without trapping.
@@ -519,9 +514,11 @@ private func int32Clamped(_ v: Double) -> Int32 {
     return Int32(min(max(v, -2_147_483_647), 2_147_483_647))
 }
 
-/// Scale a fixed-point (double) scroll field in place.
-private func scaleDouble(_ event: CGEvent, _ field: CGEventField, _ factor: Double) {
-    event.setDoubleValueField(field, value: event.getDoubleValueField(field) * factor)
+/// Zero a non-finite delta and clamp the rest to a sane pixel range, so downstream integer
+/// conversions can never trap on a corrupt foreign event.
+private func sanitizedDelta(_ v: Double) -> Double {
+    guard v.isFinite else { return 0 }
+    return min(max(v, -1_000_000), 1_000_000)
 }
 
 /// Top-level C-compatible callback (CGEventTapCallBack). Forwards to the engine via `refcon`.
