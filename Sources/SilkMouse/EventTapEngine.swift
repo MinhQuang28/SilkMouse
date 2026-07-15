@@ -301,7 +301,7 @@ final class EventTapEngine {
 
             let isContinuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
 
-            // Keyboard-modifier scrolling (MMF-style): Cmd = pinch zoom, Ctrl = quick (half a
+            // Keyboard-modifier scrolling (-style): Cmd = pinch zoom, Ctrl = quick (half a
             // window per notch), Option = precise (a few px per notch), Shift = horizontal.
             let flags = event.flags
             let modZoom = flags.contains(.maskCommand)
@@ -337,7 +337,7 @@ final class EventTapEngine {
                     mag = (event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
                          + event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2)) * dir / 800.0
                 } else {
-                    // One notch = one comfortable zoom step (MMF's medium tick ÷ its 800 scale).
+                    // One notch = one comfortable zoom step ('s medium tick ÷ its 800 scale).
                     let notches = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
                                 + event.getIntegerValueField(.scrollWheelEventDeltaAxis2)
                     mag = Double(notches.signum()) * dir * 60.0 / 800.0
@@ -389,9 +389,9 @@ final class EventTapEngine {
 
             // Resolve the glide tuning: the smoothness setting, overridden by a held modifier.
             // Quick/precise are DEFINED by their animation, so they force the glide even in
-            // Standard and Smooth-step modes (MMF does the same). maxSens is scaled ~10% by the
+            // Standard and Smooth-step modes ( does the same). maxSens is scaled ~10% by the
             // display under the cursor so big screens fling proportionally farther.
-            var profile = MMFScrollProfile.forSmoothness(smoothness)
+            var profile = ScrollProfile.forSmoothness(smoothness)
             var forceGlide = false
             if modQuick {
                 profile = .quick(screenSpan: screenSpan(at: event.location, vertical: lineV != 0))

@@ -48,7 +48,7 @@ struct SettingsView: View {
                 Picker("Smoothness", selection: $store.config.scrollSmoothness) {
                     ForEach(ScrollSmoothness.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
-                Text("Snappy = direct with a minimal tail (Mac Mouse Fix \"Regular\"). Balanced = smooth but responsive. Floaty = long trackpad-like coast (MMF \"High\").")
+                Text("Snappy = direct with a minimal tail (\"Regular\"). Balanced = smooth but responsive. Floaty = long trackpad-like coast ( \"High\").")
                     .font(.caption).foregroundStyle(.secondary)
                 VStack(alignment: .leading) {
                     Text("Scroll speed: \(String(format: "%.2f×", store.config.scrollSpeed))")

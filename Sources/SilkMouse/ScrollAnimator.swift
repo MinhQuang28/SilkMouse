@@ -2,15 +2,15 @@ import AppKit
 import CoreGraphics
 import QuartzCore
 
-/// Smooth scrolling with Mac Mouse Fix's scroll model (v3), tunable via the Smoothness setting
+/// Smooth scrolling, tunable via the Smoothness setting
 /// (Snappy / Balanced / Floaty profiles) and the precise/quick scroll modifiers.
 ///
-/// Smooth mode (wheel notches): every notch re-plans ONE glide (`MMFHybridPlan`, see
-/// MMFScrollMath.swift): tick rate → px for this notch (acceleration curve), + the previous glide's
+/// Smooth mode (wheel notches): every notch re-plans ONE glide (`HybridPlan`, see
+/// ScrollMath.swift): tick rate → px for this notch (acceleration curve), + the previous glide's
 /// unfinished distance, covered by a short bezier whose initial slope equals the current glide
 /// speed (speed smoothing — no velocity jump on retarget) that hands off to a physical drag coast
 /// v' = −a·v^b down to a stop speed. Chained fast swipes multiply the distance exponentially
-/// (MMF "fast scroll"). The drag portion is labeled with momentum phases (like MMF's trackpad
+/// ( "fast scroll"). The drag portion is labeled with momentum phases (like 's trackpad
 /// simulation) once the wheel has been quiet past the tick window, so phase-aware apps (Safari…)
 /// treat the coast natively; while ticks keep arriving everything stays one gesture stream.
 ///
@@ -80,17 +80,17 @@ final class ScrollAnimator: NSObject {
     private let stopDistance = 0.1    // px; together with `stopSpeed`, flushes the final sliver
     private let stopSpeed = 20.0      // px/s; below BOTH thresholds the glide settles
 
-    // MMF glide (Smooth wheel mode) — see MMFScrollMath.swift. One 1-D plan at a time (a wheel
+    //  glide (Smooth wheel mode) — see ScrollMath.swift. One 1-D plan at a time (a wheel
     // ticks one axis per event; an axis or direction change starts a fresh plan from rest).
-    private var mmfAnalyzer = MMFTickAnalyzer()
-    private var plan: MMFHybridPlan?
+    private var Analyzer = TickAnalyzer()
+    private var plan: HybridPlan?
     private var planStart = 0.0      // when the CURRENT plan started (reset on every notch)
     private var planRate = 1.0       // >1 compresses a fast-scroll plan into `maxDuration` wall time
     private var planPrevTime = 0.0   // plan-time of the previous frame (momentum labeling needs it)
     private var planEmitted = 0.0    // px of the plan already posted (absolute)
     private var planAxisIsV = true
     private var planSign = 1.0
-    private let planMaxDistance = 100_000.0 // px cap (fast scroll is exponential; MMF caps similarly)
+    private let planMaxDistance = 100_000.0 // px cap (fast scroll is exponential;  caps similarly)
 
     // Hi-res pixel path (addPixels) — free-spin safety.
     private var pxInputSpeed = 0.0     // smoothed incoming px/s of the raw device stream
@@ -129,7 +129,7 @@ final class ScrollAnimator: NSObject {
     /// back-and-forth scrolling) AND the glide is still moving fast enough that stopping it is
     /// what the user means (a nearly-settled crawl reverses normally instead).
     static func shouldBrakeOnReversal(silence: Double, speed: Double) -> Bool {
-        return silence >= MMFScrollTuning.tickIntervalMax && speed > 150
+        return silence >= ScrollTuning.tickIntervalMax && speed > 150
     }
 
     /// Caller must hold `lock`.
@@ -142,10 +142,10 @@ final class ScrollAnimator: NSObject {
 
     /// Feed a wheel notch (line deltas, already direction-corrected). In Smooth-step mode each notch
     /// is a fixed `lines`-line spring step with a crisp ease and no coast; in Smooth mode the notch
-    /// re-plans an MMF hybrid glide. The caller resolves `profile` (smoothness setting or a held
+    /// re-plans an  hybrid glide. The caller resolves `profile` (smoothness setting or a held
     /// modifier) and `minSens`/`maxSens` (speed slider + screen scaling); `accelerate` = fast scroll.
     func addTick(lineV: Double, lineH: Double, stepped: Bool, lines: Int,
-                 profile: MMFScrollProfile, minSens: Double, maxSens: Double, accelerate: Bool) {
+                 profile: ScrollProfile, minSens: Double, maxSens: Double, accelerate: Bool) {
         let now = CACurrentMediaTime()
 
         if stepped {
@@ -172,7 +172,7 @@ final class ScrollAnimator: NSObject {
 
         lock.lock()
         phaselessStream = false
-        // MMF-style brake: an opposite notch while the glide is COASTING (input quiet past the
+        // -style brake: an opposite notch while the glide is COASTING (input quiet past the
         // tick window, still visibly moving) stops the page dead instead of scrolling back — the
         // notch is consumed as a brake. Further opposite notches then scroll normally (the plan is
         // gone and the analyzer resets on the direction change). Reversals during active ticking
@@ -193,15 +193,15 @@ final class ScrollAnimator: NSObject {
         // stream (posted by the link thread) and reopen a gesture. Velocity carries over — no stutter.
         if mode == .momentum { momentumInterrupted = true; mode = .gesture; phaseStarted = false }
 
-        // Tick rate → px for this notch; chained fast swipes multiply it (MMF fast scroll).
-        let analysis = mmfAnalyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2),
+        // Tick rate → px for this notch; chained fast swipes multiply it ( fast scroll).
+        let analysis = Analyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2),
                                         swipeMaxInterval: profile.swipeMaxInterval,
                                         swipeMinTickSpeed: profile.swipeMinTickSpeed)
-        var px = MMFScrollTuning.pxPerTick(tickHz: analysis.tickHz, minSens: minSens, maxSens: maxSens)
+        var px = ScrollTuning.pxPerTick(tickHz: analysis.tickHz, minSens: minSens, maxSens: maxSens)
         if accelerate, let speedup = profile.speedup { px *= speedup.factor(swipes: analysis.swipes) }
 
         // Re-plan: unfinished distance rolls into the new glide (dropped at a sequence start, like
-        // MMF) and the new plan takes off at the current glide speed — that continuity is the
+        // ) and the new plan takes off at the current glide speed — that continuity is the
         // "speed smoothing" that makes consecutive notches feel like one push.
         var leftover = 0.0
         var v0 = 0.0
@@ -210,13 +210,13 @@ final class ScrollAnimator: NSObject {
             if !analysis.isSequenceStart { leftover = max(p.total - planEmitted, 0) }
             v0 = p.speed(at: planTime) * planRate
         }
-        let p = MMFHybridPlan(distance: min(leftover + px, planMaxDistance), initialSpeed: v0,
+        let p = HybridPlan(distance: min(leftover + px, planMaxDistance), initialSpeed: v0,
                               profile: profile)
         plan = p
         planStart = now
         planPrevTime = 0
         planEmitted = 0
-        planRate = max(1.0, p.duration / MMFScrollTuning.maxDuration)
+        planRate = max(1.0, p.duration / ScrollTuning.maxDuration)
         planAxisIsV = axisIsV
         planSign = sign
         if analysis.isSequenceStart { carryV = 0; carryH = 0 }
@@ -318,7 +318,7 @@ final class ScrollAnimator: NSObject {
         remV = 0; remH = 0; carryV = 0; carryH = 0; velV = 0; velH = 0
         phaselessStream = false
         clearPlanLocked()
-        mmfAnalyzer.reset()
+        Analyzer.reset()
         lock.unlock()
 
         guard openStream != .idle, let rl else { return } // nothing open → nothing to close
@@ -457,7 +457,7 @@ final class ScrollAnimator: NSObject {
         remV = 0; remH = 0; carryV = 0; carryH = 0; velV = 0; velH = 0
         phaselessStream = false
         clearPlanLocked()
-        mmfAnalyzer.reset()
+        Analyzer.reset()
         mode = .idle
         phaseStarted = false
         momentumInterrupted = false
@@ -559,7 +559,7 @@ final class ScrollAnimator: NSObject {
         var wantMomentum = false
         let maxFrameD = ScrollAnimator.maxOutputSpeed * dt // speed ceiling, as px for THIS frame
         if let p = plan {
-            // MMF glide: sample the plan at (wall time since the last re-plan) × compression rate.
+            //  glide: sample the plan at (wall time since the last re-plan) × compression rate.
             // Advance at most 50 ms of plan time per frame (the plan-path twin of the spring's dt
             // clamp): across a sleep/stall the mach clock can jump far ahead of the last frame,
             // and an unclamped sample would dump the glide's whole backlog as one violent frame.
@@ -571,11 +571,11 @@ final class ScrollAnimator: NSObject {
             let d = min(max(p.distance(at: planTime) - planEmitted, 0), maxFrameD)
             planEmitted += d
             if planAxisIsV { dV = d * planSign } else { dH = d * planSign }
-            // Momentum labeling (MMF trackpad sim): the drag coast is momentum, but only after the
+            // Momentum labeling ( trackpad sim): the drag coast is momentum, but only after the
             // wheel has been quiet past the tick window (each notch resets `planStart`) and only
             // for frames that lie ENTIRELY inside the drag portion — so steady ticking stays one
             // gesture stream instead of churning ended→momentum→began between notches.
-            wantMomentum = (now - planStart) >= MMFScrollTuning.tickIntervalMax
+            wantMomentum = (now - planStart) >= ScrollTuning.tickIntervalMax
                 && p.inDragPhase(at: planPrevTime) && p.inDragPhase(at: planTime)
             planPrevTime = planTime
             // Drained (fully emitted, not merely past the end time — the ceiling may still be

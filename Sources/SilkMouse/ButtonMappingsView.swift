@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Button mappings (Settings ▸ Buttons). Add a mapping by clicking your actual mouse button into the
-/// capture field (MMF-style), then assign an action — no guessing button numbers.
+/// capture field (-style), then assign an action — no guessing button numbers.
 struct ButtonMappingsView: View {
     @EnvironmentObject var store: ConfigStore
 

@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// "Click here with a mouse button" field — captures which physical button you press (like MMF),
+/// "Click here with a mouse button" field — captures which physical button you press (like ),
 /// so you never have to guess button numbers. Reports the 1-based button number via `onCapture`.
 struct ButtonCaptureField: View {
     var onCapture: (Int) -> Void

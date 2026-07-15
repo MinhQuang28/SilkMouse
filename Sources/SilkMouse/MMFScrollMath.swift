@@ -1,32 +1,32 @@
 import Foundation
 
 /// Mac-Mouse-Fix-style smooth-scroll math (v3). Clean-room re-derivation of the published model;
-/// only the *tuning constants* are taken from MMF, the code is original. Three user-selectable
-/// profiles (`ScrollSmoothness` → `MMFScrollProfile`) plus dedicated precise/quick modifier
+/// only the *tuning constants* are taken from , the code is original. Three user-selectable
+/// profiles (`ScrollSmoothness` → `ScrollProfile`) plus dedicated precise/quick modifier
 /// profiles.
 ///
 /// The model, per wheel notch:
-///   1. `MMFTickAnalyzer` measures the tick rate (rolling average of the last 3 inter-tick gaps)
+///   1. `TickAnalyzer` measures the tick rate (rolling average of the last 3 inter-tick gaps)
 ///      and counts consecutive "swipes" (bursts of ≥3 rapid ticks) for fast-scroll.
-///   2. `MMFScrollTuning.pxPerTick` maps tick rate → pixels for this notch (a capped linear
+///   2. `ScrollTuning.pxPerTick` maps tick rate → pixels for this notch (a capped linear
 ///      sensitivity curve: minSens at ≤6.25 ticks/s rising to maxSens at 66.7 ticks/s).
-///   3. `MMFSpeedupCurve` multiplies the notch distance exponentially once the user chains swipes
-///      (MMF's "fast scroll" — flinging through long documents).
-///   4. `MMFHybridPlan` re-plans the glide: remaining distance + new notch distance are covered by
+///   3. `SpeedupCurve` multiplies the notch distance exponentially once the user chains swipes
+///      ('s "fast scroll" — flinging through long documents).
+///   4. `HybridPlan` re-plans the glide: remaining distance + new notch distance are covered by
 ///      a short bezier whose *initial slope equals the current glide speed* (speed smoothing — no
 ///      velocity jump on retarget), handed off to a physical drag curve v' = −a·v^b that decays to
-///      `stopSpeed`. The drag tail is what gives MMF its signature inertial coast.
-enum MMFScrollTuning {
+///      `stopSpeed`. The drag tail is what gives  its signature inertial coast.
+enum ScrollTuning {
 
     static let maxDuration = 1.5          // s — fast-scroll animations are compressed to this
 
-    /// Tick-rate window (MMF ScrollAnalyzer): gaps outside [15 ms, 160 ms] are clamped; a gap
+    /// Tick-rate window ( ScrollAnalyzer): gaps outside [15 ms, 160 ms] are clamped; a gap
     /// above the max starts a new tick sequence.
     static let tickIntervalMin = 0.015
     static let tickIntervalMax = 0.160
 
     /// The acceleration curve is linear from (1/tickIntervalMax, minSens) to
-    /// (1/tickIntervalMin, maxSens), clamped below, linearly extended above (MMF curvature 0).
+    /// (1/tickIntervalMin, maxSens), clamped below, linearly extended above ( curvature 0).
     static func pxPerTick(tickHz: Double, minSens: Double, maxSens: Double) -> Double {
         let xMin = 1.0 / tickIntervalMax
         let xMax = 1.0 / tickIntervalMin
@@ -35,11 +35,11 @@ enum MMFScrollTuning {
     }
 }
 
-/// The user-facing smoothness setting — three MMF-derived curve profiles.
+/// The user-facing smoothness setting — three -derived curve profiles.
 enum ScrollSmoothness: String, Codable, Sendable, CaseIterable {
-    case snappy   // MMF "Regular" as shipped — direct, minimal tail
-    case balanced // MMF's softened-Regular alternative — smooth but responsive (default)
-    case floaty   // MMF "High" — long trackpad-like coast
+    case snappy   //  "Regular" as shipped — direct, minimal tail
+    case balanced // 's softened-Regular alternative — smooth but responsive (default)
+    case floaty   //  "High" — long trackpad-like coast
 
     var label: String {
         switch self {
@@ -52,7 +52,7 @@ enum ScrollSmoothness: String, Codable, Sendable, CaseIterable {
 
 /// One complete curve + sensitivity tuning. The engine resolves a profile per tick from the
 /// smoothness setting and any held modifier (Option → precise, Ctrl → quick).
-struct MMFScrollProfile {
+struct ScrollProfile {
     let baseMsPerStep: Double     // s — base (gesture) portion target duration
     let speedSmoothing: Double    // bezier reach along the current-speed direction (0 = linear)
     let dragCoefficient: Double   // a in v' = −a·v^b
@@ -60,53 +60,53 @@ struct MMFScrollProfile {
     let stopSpeed: Double         // px/s — drag tail ends here
     let minSensAnchors: (lo: Double, mid: Double, hi: Double) // px/tick at slider 0 / 0.5 / 1
     let maxSensAnchors: (lo: Double, mid: Double, hi: Double)
-    let speedup: MMFSpeedupCurve? // fast-scroll multiplier; nil → never speeds up
-    // Swipe-chaining window (MMF varies these per curve: floatier curves chain more forgivingly).
+    let speedup: SpeedupCurve? // fast-scroll multiplier; nil → never speeds up
+    // Swipe-chaining window ( varies these per curve: floatier curves chain more forgivingly).
     var swipeMaxInterval = 0.375   // s between bursts to still chain the swipe counter
     var swipeMinTickSpeed = 16.0   // ticks/s averaged over the sequence
 
-    /// MMF "Regular" as shipped: linear base, steep drag — snappy and direct.
-    static let snappy = MMFScrollProfile(
+    ///  "Regular" as shipped: linear base, steep drag — snappy and direct.
+    static let snappy = ScrollProfile(
         baseMsPerStep: 0.140, speedSmoothing: 0.0, dragCoefficient: 15, dragExponent: 1.05,
         stopSpeed: 30, minSensAnchors: (30, 60, 120), maxSensAnchors: (90, 120, 180),
         speedup: .regular)
 
-    /// The alternative Regular tuning noted in MMF's ScrollConfig ("still super responsive and
+    /// The alternative Regular tuning noted in 's ScrollConfig ("still super responsive and
     /// much smoother feeling"): speed smoothing for velocity continuity, gentler drag.
-    static let balanced = MMFScrollProfile(
+    static let balanced = ScrollProfile(
         baseMsPerStep: 0.175, speedSmoothing: 0.15, dragCoefficient: 25, dragExponent: 0.9,
         stopSpeed: 30, minSensAnchors: (30, 60, 120), maxSensAnchors: (90, 120, 180),
         speedup: .regular)
 
-    /// MMF "High": long, floaty trackpad-like coast; fast scroll kicks in a swipe earlier.
-    static let floaty = MMFScrollProfile(
+    ///  "High": long, floaty trackpad-like coast; fast scroll kicks in a swipe earlier.
+    static let floaty = ScrollProfile(
         baseMsPerStep: 0.220, speedSmoothing: 0.15, dragCoefficient: 40, dragExponent: 0.7,
         stopSpeed: 30, minSensAnchors: (60, 90, 150), maxSensAnchors: (120, 180, 240),
-        speedup: MMFSpeedupCurve(swipeThreshold: 2, initialSpeedup: 1.33, exponentialSpeedup: 7.5),
+        speedup: SpeedupCurve(swipeThreshold: 2, initialSpeedup: 1.33, exponentialSpeedup: 7.5),
         swipeMaxInterval: 0.6, swipeMinTickSpeed: 12)
 
-    /// Option-modifier precise scrolling (MMF PreciseScroll): a few px per tick for fine control,
+    /// Option-modifier precise scrolling ( PreciseScroll): a few px per tick for fine control,
     /// snappy curve, no fast scroll. Slider-independent (constant anchors).
-    static let precise = MMFScrollProfile(
+    static let precise = ScrollProfile(
         baseMsPerStep: 0.140, speedSmoothing: 0.0, dragCoefficient: 15, dragExponent: 1.05,
         stopSpeed: 50, minSensAnchors: (2, 2, 2), maxSensAnchors: (20, 20, 20),
         speedup: nil)
 
-    /// Ctrl-modifier quick scrolling (MMF QuickScroll): each notch moves about half a window,
+    /// Ctrl-modifier quick scrolling ( QuickScroll): each notch moves about half a window,
     /// long inertial coast, aggressive speedup. Sensitivity comes from the screen span under the
-    /// cursor, not the slider (MMF scales to 85% of the screen as the "window size").
-    static func quick(screenSpan: Double) -> MMFScrollProfile {
+    /// cursor, not the slider ( scales to 85% of the screen as the "window size").
+    static func quick(screenSpan: Double) -> ScrollProfile {
         let window = max(screenSpan, 400) * 0.85
-        return MMFScrollProfile(
+        return ScrollProfile(
             baseMsPerStep: 0.300, speedSmoothing: 0.0, dragCoefficient: 30, dragExponent: 0.7,
             stopSpeed: 1,
             minSensAnchors: (window * 0.5, window * 0.5, window * 0.5),
             maxSensAnchors: (window * 1.5, window * 1.5, window * 1.5),
-            speedup: MMFSpeedupCurve(swipeThreshold: 1, initialSpeedup: 2.0, exponentialSpeedup: 10),
+            speedup: SpeedupCurve(swipeThreshold: 1, initialSpeedup: 2.0, exponentialSpeedup: 10),
             swipeMaxInterval: 0.725, swipeMinTickSpeed: 12)
     }
 
-    static func forSmoothness(_ s: ScrollSmoothness) -> MMFScrollProfile {
+    static func forSmoothness(_ s: ScrollSmoothness) -> ScrollProfile {
         switch s {
         case .snappy:   return .snappy
         case .balanced: return .balanced
@@ -116,7 +116,7 @@ struct MMFScrollProfile {
 
     /// (minSens, maxSens) px/tick for the speed slider (anchors at 0 / 0.5 / 1, linear extension
     /// past 1 — SilkMouse's slider runs 0.05…1.5) and the display under the cursor: maxSens gets
-    /// a 10%-weighted scale by screen span relative to a 1080p baseline (MMF's screen scaling),
+    /// a 10%-weighted scale by screen span relative to a 1080p baseline ('s screen scaling),
     /// so big displays fling proportionally farther.
     func sensitivity(slider: Double, screenSizeFactor: Double = 1.0) -> (minSens: Double, maxSens: Double) {
         func piecewise(_ a: (lo: Double, mid: Double, hi: Double)) -> Double {
@@ -131,16 +131,16 @@ struct MMFScrollProfile {
     }
 }
 
-/// MMF's fast-scroll multiplier: 1.0 until `threshold` consecutive swipes, then an exponential
+/// 's fast-scroll multiplier: 1.0 until `threshold` consecutive swipes, then an exponential
 /// ramp `a·1.1^((x−t)·c) + 1 − a` scaled so the first speedup step is `initialSpeedup`.
-struct MMFSpeedupCurve {
+struct SpeedupCurve {
     let threshold: Double
     private let a: Double
     private let c: Double
 
     /// LowInertia ("Regular") tuning: kicks in on the 4th chained swipe, ×1.33 then ~×2 per
     /// further swipe. (HighInertia uses swipeThreshold 2 — one swipe earlier.)
-    static let regular = MMFSpeedupCurve(swipeThreshold: 3, initialSpeedup: 1.33, exponentialSpeedup: 7.5)
+    static let regular = SpeedupCurve(swipeThreshold: 3, initialSpeedup: 1.33, exponentialSpeedup: 7.5)
 
     init(swipeThreshold t: Int, initialSpeedup p: Double, exponentialSpeedup c: Double) {
         self.threshold = Double(t)
@@ -149,16 +149,16 @@ struct MMFSpeedupCurve {
     }
 
     func factor(swipes: Double) -> Double {
-        let x = swipes + 1 // MMF counts swipes from 0
+        let x = swipes + 1 //  counts swipes from 0
         guard x >= threshold else { return 1.0 }
         return min(a * pow(1.1, (x - threshold) * c) + 1 - a, 100_000)
     }
 }
 
-/// Tick-rate + swipe analysis (MMF ScrollAnalyzer). Feed every wheel notch; returns the smoothed
+/// Tick-rate + swipe analysis ( ScrollAnalyzer). Feed every wheel notch; returns the smoothed
 /// tick rate that drives the acceleration curve, the consecutive-swipe count that drives fast
 /// scroll, and whether this notch starts a fresh sequence (leftover glide distance is dropped).
-struct MMFTickAnalyzer {
+struct TickAnalyzer {
 
     struct Result {
         var tickHz: Double        // smoothed, clamped to [6.25, 66.7]
@@ -189,7 +189,7 @@ struct MMFTickAnalyzer {
 
     /// `direction`: any stable key that changes on axis or sign flips (e.g. ±1 / ±2).
     /// `swipeMaxInterval`/`swipeMinTickSpeed` come from the active profile (floatier curves
-    /// chain fast-scroll swipes more forgivingly, per MMF).
+    /// chain fast-scroll swipes more forgivingly, per ).
     mutating func feed(now: Double, direction: Int,
                        swipeMaxInterval: Double = 0.375, swipeMinTickSpeed: Double = 16) -> Result {
         if direction != lastDirection {
@@ -197,12 +197,12 @@ struct MMFTickAnalyzer {
             lastDirection = direction
         }
 
-        let rawGap = max(now - lastTickTime, MMFScrollTuning.tickIntervalMin)
+        let rawGap = max(now - lastTickTime, ScrollTuning.tickIntervalMin)
         ticksInSequence += 1
 
-        if rawGap > MMFScrollTuning.tickIntervalMax {
+        if rawGap > ScrollTuning.tickIntervalMax {
             // First tick of a new burst — decide whether it chains the swipe count.
-            let previousBurstLongEnough = consecutiveTicks >= MMFTickAnalyzer.swipeMinTicks
+            let previousBurstLongEnough = consecutiveTicks >= TickAnalyzer.swipeMinTicks
             let closeEnough = rawGap <= swipeMaxInterval
             let sequenceElapsed = now - sequenceStartTime
             let fastEnough = sequenceElapsed > 0
@@ -224,18 +224,18 @@ struct MMFTickAnalyzer {
 
         // Free-spinning wheels never pause between "swipes"; credit fractional swipes instead so
         // fast scroll still engages after ~a wheel-turn of continuous ticks.
-        if Double(consecutiveTicks) >= MMFTickAnalyzer.freeSpinTicksPerSwipe {
-            swipes += 1.0 / MMFTickAnalyzer.freeSpinTicksPerSwipe
+        if Double(consecutiveTicks) >= TickAnalyzer.freeSpinTicksPerSwipe {
+            swipes += 1.0 / TickAnalyzer.freeSpinTicksPerSwipe
         }
 
         lastTickTime = now
 
         let smoothedGap: Double
         if consecutiveTicks == 0 {
-            smoothedGap = MMFScrollTuning.tickIntervalMax // single/slow ticks sit at the curve floor
+            smoothedGap = ScrollTuning.tickIntervalMax // single/slow ticks sit at the curve floor
         } else {
             smoothedGap = min(gapWindow.reduce(0, +) / Double(gapWindow.count),
-                              MMFScrollTuning.tickIntervalMax)
+                              ScrollTuning.tickIntervalMax)
         }
 
         return Result(tickHz: 1.0 / smoothedGap,
@@ -248,7 +248,7 @@ struct MMFTickAnalyzer {
 /// gesture portion. p1 sits `speedSmoothing` along the unit vector of the current speed, which
 /// makes the curve's initial slope equal the running glide speed — the "speed smoothing" that
 /// removes per-notch velocity jumps.
-struct MMFSpeedBezier {
+struct SpeedBezier {
     let p1x: Double
     let p1y: Double
 
@@ -283,9 +283,9 @@ struct MMFSpeedBezier {
     func y(atX x: Double) -> Double { y(atT: t(atX: x)) }
 }
 
-/// Closed-form drag decay v' = −a·v^b from `v0` down to `stopSpeed` (b ≠ 1, 2 — MMF High uses 0.7).
+/// Closed-form drag decay v' = −a·v^b from `v0` down to `stopSpeed` (b ≠ 1, 2 —  High uses 0.7).
 /// distance(t) = (v0^{2−b} − v(t)^{2−b}) / (a(2−b)),  v(t) = (v0^{1−b} − a(1−b)t)^{1/(1−b)}.
-struct MMFDragSegment {
+struct DragSegment {
     let a: Double
     let b: Double
     let v0: Double
@@ -324,14 +324,14 @@ struct MMFDragSegment {
 
 /// One glide: bezier gesture portion (up to the transition point) + drag coast, covering exactly
 /// `total` px in `duration` s. Rebuilt on every wheel notch with the then-current speed.
-struct MMFHybridPlan {
+struct HybridPlan {
     let total: Double            // px, > 0
     let duration: Double         // s
     let transitionTime: Double   // s — bezier portion ends here
     let transitionDistance: Double
-    private let bezier: MMFSpeedBezier?
+    private let bezier: SpeedBezier?
     private let bezierDuration: Double // full (unclipped) bezier time scale
-    private let drag: MMFDragSegment?
+    private let drag: DragSegment?
     private let scale: Double          // total / raw curve end — the transition search stops within
                                        // a distance epsilon; normalizing makes the end land exactly
 
@@ -339,7 +339,7 @@ struct MMFHybridPlan {
     ///   - distance: px to cover (> 0)
     ///   - initialSpeed: current glide speed in px/s (≥ 0); the plan starts at this speed
     ///   - profile: curve shape (base duration, speed smoothing, drag, stop speed)
-    init(distance: Double, initialSpeed: Double, profile: MMFScrollProfile = .balanced) {
+    init(distance: Double, initialSpeed: Double, profile: ScrollProfile = .balanced) {
         let baseDuration = profile.baseMsPerStep
         let smoothing = profile.speedSmoothing
         let dragCoefficient = profile.dragCoefficient
@@ -348,7 +348,7 @@ struct MMFHybridPlan {
 
         total = distance
         bezierDuration = baseDuration
-        let curve = MMFSpeedBezier(normalizedInitialSpeed: initialSpeed * baseDuration / distance,
+        let curve = SpeedBezier(normalizedInitialSpeed: initialSpeed * baseDuration / distance,
                                    smoothing: smoothing)
 
         // Combined distance if the drag tail is attached at bezier parameter t: the bezier covers
@@ -356,13 +356,13 @@ struct MMFHybridPlan {
         func speedAt(_ t: Double) -> Double { curve.slope(atT: t) * distance / baseDuration }
         func combined(_ t: Double) -> Double {
             let base = curve.y(atT: t) * distance
-            guard let d = MMFDragSegment(initialSpeed: speedAt(t), a: dragCoefficient,
+            guard let d = DragSegment(initialSpeed: speedAt(t), a: dragCoefficient,
                                          b: dragExponent, stopSpeed: stopSpeed) else { return base }
             return base + d.distance
         }
 
         // Find the latest attachment point where bezier + drag covers exactly `distance`:
-        // coarse scan from t=1 downward, then bisection (MMF BezierHybridCurve).
+        // coarse scan from t=1 downward, then bisection ( BezierHybridCurve).
         let epsilon = 0.2
         var t: Double? = nil
         var lo = 0.0, hi = 1.0
@@ -385,7 +385,7 @@ struct MMFHybridPlan {
 
         if let t {
             let exitSpeed = speedAt(t)
-            let dragSeg = MMFDragSegment(initialSpeed: exitSpeed, a: dragCoefficient,
+            let dragSeg = DragSegment(initialSpeed: exitSpeed, a: dragCoefficient,
                                          b: dragExponent, stopSpeed: stopSpeed)
             bezier = curve
             transitionTime = curve.x(atT: t) * baseDuration
@@ -396,8 +396,8 @@ struct MMFHybridPlan {
             scale = rawEnd > 0 ? distance / rawEnd : 1
         } else {
             // Even attaching at t=0 over-coasts (huge incoming speed, small distance): drag-only
-            // plan that covers exactly `distance`. The incoming speed is dropped, like MMF.
-            let dragSeg = MMFDragSegment(distance: distance, a: dragCoefficient,
+            // plan that covers exactly `distance`. The incoming speed is dropped, like .
+            let dragSeg = DragSegment(distance: distance, a: dragCoefficient,
                                          b: dragExponent, stopSpeed: stopSpeed)
             bezier = nil
             transitionTime = 0

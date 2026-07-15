@@ -5,10 +5,6 @@ import CoreGraphics
 /// pinch, so it zooms anything a trackpad pinch zooms (browsers, Preview, Maps…), unlike Cmd+"+"
 /// key presses.
 ///
-/// Mechanism (mirrors Mac Mouse Fix's TouchSimulator): a type-29 CGEvent (NSEventTypeGesture)
-/// whose undocumented fields carry subtype 8 (kIOHIDEventTypeZoom), an IOHIDEvent gesture phase
-/// (field 132), and the magnification delta (field 113).
-///
 /// Stream shape: the first tick opens the gesture (began carries its delta), further ticks are
 /// `changed`, and the gesture closes with an empty `ended` after the wheel has been quiet for
 /// `endTimeout` (we can't see the Cmd key-up — the tap only listens to mouse events).
@@ -29,7 +25,7 @@ final class MagnifySynthesizer {
     /// Feed one wheel tick's worth of zoom. `magnification` is the signed pinch delta
     /// (positive = zoom in); `chromiumBoost` should be true when the app under the cursor is a
     /// Chromium browser — they swallow small pinch deltas, so the gesture opens with a big first
-    /// step to feel responsive (MMF's long-standing workaround).
+    /// step to feel responsive ('s long-standing workaround).
     func feed(magnification: Double, chromiumBoost: Bool) {
         guard magnification != 0 else { return }
 

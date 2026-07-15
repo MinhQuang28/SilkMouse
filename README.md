@@ -8,8 +8,9 @@ or any system configuration changes.
 ## Features
 
 ### Scroll
-- **Three styles** — *Standard* (instant wheel, no animation), *Smooth* (trackpad-style eased
-  momentum), and *Smooth-step* (Windows-browser feel: each notch eases a fixed number of lines
+
+- **Three styles** — _Standard_ (instant wheel, no animation), _Smooth_ (trackpad-style eased
+  momentum), and _Smooth-step_ (Windows-browser feel: each notch eases a fixed number of lines
   with no coast).
 - **Adjustable speed** and **lines-per-notch** (Smooth-step).
 - **Reverse direction** independent of the system setting.
@@ -19,15 +20,18 @@ or any system configuration changes.
 - Trackpad gestures are never touched — only a physical mouse wheel is affected.
 
 ### Buttons
+
 - Remap any mouse button to a **preset action** (Move Left/Right a Space, Mission Control,
   App Exposé, Launchpad, media keys) or **record a custom keyboard shortcut** (e.g. ⌘[ / ⌘]
   for browser back/forward, ⌘W, ⌘⇧4).
 
 ### Gestures
+
 - **Drag to switch Spaces** — hold a chosen button and drag left/right; one Space jump per
   configurable drag distance.
 
 ### Reliability
+
 - Recovers automatically from **sleep/wake** and **display changes** (plugging/unplugging a
   monitor or changing resolution) — scroll and gestures never silently die.
 - Correctly handles **high-resolution / free-spin mice** (honors speed and reverse without
@@ -105,13 +109,13 @@ tools/package-release.sh --publish
 
 ### Project layout
 
-| Path | Purpose |
-|------|---------|
-| `Sources/SilkMouse/` | App source (event tap, scroll animator, settings UI, config) |
-| `Tests/SilkMouseTests/` | Unit tests |
-| `build-app.sh` | Assemble & sign the `.app` bundle |
-| `tools/setup-signing-cert.sh` | Create the stable local signing certificate |
-| `tools/package-release.sh` | Build, zip, hash, and (optionally) publish a release |
+| Path                          | Purpose                                                      |
+| ----------------------------- | ------------------------------------------------------------ |
+| `Sources/SilkMouse/`          | App source (event tap, scroll animator, settings UI, config) |
+| `Tests/SilkMouseTests/`       | Unit tests                                                   |
+| `build-app.sh`                | Assemble & sign the `.app` bundle                            |
+| `tools/setup-signing-cert.sh` | Create the stable local signing certificate                  |
+| `tools/package-release.sh`    | Build, zip, hash, and (optionally) publish a release         |
 
 ## License
 
@@ -120,4 +124,4 @@ SilkMouse is **source-available** under the [PolyForm Noncommercial License 1.0.
 - ✅ Free for **personal, noncommercial use** — install it, read the source, modify it, build it yourself, share it for free.
 - ❌ **Commercial use is not permitted** — you may not copy this source into your own product, sell it, charge for access to it, or otherwise use it for commercial purposes without a separate license from the author.
 
-Copyright © Ha Minh Quang. Mac Mouse Fix was used only as a behavioral reference; no source was copied from it.
+Copyright © Ha Minh Quang; no source was copied from it.

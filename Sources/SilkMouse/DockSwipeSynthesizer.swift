@@ -5,14 +5,7 @@ import CoreGraphics
 /// transition (what a three-finger trackpad swipe produces), so Space-drag can FOLLOW the pointer
 /// instead of jumping discretely.
 ///
-/// Mechanism (mirrors Mac Mouse Fix's TouchSimulator, verified against its source): a type-30
-/// CGEvent whose undocumented value fields carry a DockSwipe payload — subtype 23
-/// (kIOHIDEventTypeDockSwipe), an IOHIDEvent gesture phase, and a cumulative `originOffset`
-/// progress (≈1.0 per Space, see `horizontalScale`), followed by a bare type-29 companion event.
-/// macOS 27 stops reading these fields (WindowServer wants a real IOHIDEvent attached via
-/// SkyLight's `SLEventSetIOHIDEvent`); that era is NOT implemented — `isSupported` gates it off
-/// and SpaceDragGesture falls back to discrete jumps there.
-///
+
 /// Threading: gesture state (`originOffset`, `lastDelta`) is touched only on the event-tap thread
 /// (same contract as SpaceDragGesture); the end-event re-send bookkeeping lives on the main queue.
 final class DockSwipeSynthesizer {
@@ -33,7 +26,7 @@ final class DockSwipeSynthesizer {
     private var resendGeneration = 0
 
     /// originOffset units per pixel of horizontal drag, so one screen-width of drag ≈ one Space —
-    /// MMF's empirically-derived scaling. More Spaces need less progress each; 63 px is the
+    /// 's empirically-derived scaling. More Spaces need less progress each; 63 px is the
     /// inter-Space separator width. Thread-safe (CoreGraphics + SkyLight SPI only, no AppKit).
     static func horizontalScale() -> Double {
         let width = CGDisplayBounds(CGMainDisplayID()).width
@@ -86,7 +79,7 @@ final class DockSwipeSynthesizer {
 
         if phase == .ended || phase == .cancelled {
             // WindowServer under load drops end events, leaving the transition stuck mid-slide;
-            // re-sending them at +0.2 s and +0.5 s unsticks it (MMF's long-standing workaround).
+            // re-sending them at +0.2 s and +0.5 s unsticks it ('s long-standing workaround).
             DispatchQueue.main.async { self.scheduleEndResends(e30, e29) }
         }
     }
@@ -105,7 +98,7 @@ final class DockSwipeSynthesizer {
     }
 
     /// The type-30 event carrying the DockSwipe payload in undocumented value fields. Every field
-    /// number/encoding is copied verbatim from MMF's TouchSimulator (its comments admit several
+    /// number/encoding is copied verbatim from 's TouchSimulator (its comments admit several
     /// are cargo-culted from captured real events — they are what WindowServer accepts).
     private func makeSwipeEvent(phase: Phase, type: SwipeType, exitSpeed: Double) -> CGEvent? {
         guard let e = CGEvent(source: nil) else { return nil }
@@ -118,7 +111,7 @@ final class DockSwipeSynthesizer {
         setD(124, originOffset)
         setI(135, Int64(Float32(originOffset).bitPattern)) // same offset, float32 bits in an int64
         setD(41, 33231)
-        // Fields 119/139 hold the swipe type as a float32 BIT PATTERN read as a float (MMF's
+        // Fields 119/139 hold the swipe type as a float32 BIT PATTERN read as a float ('s
         // "weird constants" 1.4e-45 / 2.8e-45 are exactly bitPattern 1 / 2).
         let typeFloat = Double(Float32(bitPattern: UInt32(type.rawValue)))
         setD(119, typeFloat)
@@ -133,7 +126,7 @@ final class DockSwipeSynthesizer {
         return e
     }
 
-    /// The bare type-29 (NSEventTypeGesture) companion MMF posts alongside every swipe event.
+    /// The bare type-29 (NSEventTypeGesture) companion  posts alongside every swipe event.
     private func makeCompanionEvent() -> CGEvent? {
         guard let e = CGEvent(source: nil) else { return nil }
         e.setDoubleValueField(CGEventField(rawValue: 55)!, value: 29)
