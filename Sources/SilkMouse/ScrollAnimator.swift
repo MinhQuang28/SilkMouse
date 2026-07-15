@@ -713,17 +713,23 @@ final class ScrollAnimator: NSObject {
         // must come AFTER it — line first, then fixed-point, then point. Writing the line delta
         // last quantizes every frame to whole lines: slow glides then move in 0/±1 px lumps
         // (visible shaking) and everything scrolls ~10× slower than planned.
+        // Field semantics copied from real trackpad events (and Mac Mouse Fix's long-proven
+        // synthesis): the line delta AND the fixed-point delta are both in LINE units (1 line
+        // ≈ 10 px) — fixed-point is the precise fractional line count, the integer field is
+        // its accumulated whole part. Only the POINT delta is in pixels; that's what
+        // `scrollingDeltaY` (GUI smoothness) reads on continuous events. Terminals build their
+        // mouse reports from `deltaY` — the fixed-point field — so putting PIXELS there makes
+        // a 47 px frame read as 47 LINES and floods vim/tmux with reports (`ESC[<65;…M`
+        // garbage). Write order still matters: line first, then fixed-point, then point (the
+        // line setter re-syncs the other two views).
         lineCarryV += preciseV / 10
         lineCarryH += preciseH / 10
         let lv = lineCarryV.rounded(.towardZero); lineCarryV -= lv
         let lh = lineCarryH.rounded(.towardZero); lineCarryH -= lh
         event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lv))
         event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lh))
-        // Precise sub-pixel deltas for apps that read the fixed-point field (most modern ones),
-        // so slow scrolls glide instead of stepping between whole pixels.
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV)
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: preciseH)
-        // Integer pixel deltas last — the line write above re-synced them to line×8.
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV / 10)
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: preciseH / 10)
         event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(intV))
         event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(intH))
         // Stamp the phases so phase-aware apps (Safari) render a coherent gesture + coast, not jumps.
