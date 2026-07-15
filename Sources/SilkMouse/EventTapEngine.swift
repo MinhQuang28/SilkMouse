@@ -31,6 +31,18 @@ final class EventTapEngine {
     private var spaceDragFollowFinger = true
     private var captureMode = false
     private var excludedBundleIDs: Set<String> = []
+
+    /// Terminal emulators are always excluded from smoothing (merged with the user's list).
+    /// They are line-grid UIs that translate accumulated scroll PIXELS into mouse-reporting
+    /// wheel events (vim/tmux then multiply each by ~3 lines) — an accelerated glide of
+    /// 30–100 px per notch therefore jumps 10-30 text lines no matter what the legacy line
+    /// fields say. Native notch events are the only stream terminals interpret at wheel scale.
+    /// (Warp is deliberately NOT here — it renders pixel scrolling natively and stays smooth.)
+    private static let terminalBundleIDs: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty",
+        "com.github.wez.wezterm", "com.mitchellh.ghostty",
+        "org.alacritty", "co.zeit.hyper", "app.tabby",
+    ]
     private var verticalToHorizontalBundleIDs: Set<String> = []
     private var mappingsByButton: [Int: RemapAction] = [:]
     private var pendingDragCancel = false // set on wake/device-change, consumed on the tap thread
@@ -180,7 +192,7 @@ final class EventTapEngine {
         spaceDragThreshold = config.spaceDragThreshold
         spaceDragReverse = config.spaceDragReverse
         spaceDragFollowFinger = config.spaceDragFollowFinger
-        excludedBundleIDs = Set(config.excludedBundleIDs)
+        excludedBundleIDs = Set(config.excludedBundleIDs).union(EventTapEngine.terminalBundleIDs)
         verticalToHorizontalBundleIDs = Set(config.verticalToHorizontalBundleIDs)
         mappingsByButton = Dictionary(config.mappings.map { ($0.buttonNumber, $0.action) },
                                       uniquingKeysWith: { first, _ in first })
@@ -500,14 +512,18 @@ extension EventTapEngine {
         // and fixed-point deltas are in LINE units (fixed-point = precise fractional lines,
         // integer = accumulated whole lines), point delta is in pixels. Pixels in the
         // fixed-point field read as N× too many lines and flood mouse-reporting terminals.
-        contLineCarryV += fV / 10
-        contLineCarryH += fH / 10
+        // Lines are derived from the PRE-gain deltas (fV/fH carry gain already, so divide it
+        // back out): the slider scales pixel motion, but the device still turned the same
+        // amount, and line-based consumers should see the device's own line count.
+        let lineDiv = 10 * max(abs(gain), 0.05)
+        contLineCarryV += fV / lineDiv
+        contLineCarryH += fH / lineDiv
         let lv = contLineCarryV.rounded(.towardZero); contLineCarryV -= lv
         let lh = contLineCarryH.rounded(.towardZero); contLineCarryH -= lh
         out.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lv))
         out.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lh))
-        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fV / 10)
-        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fH / 10)
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fV / lineDiv)
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fH / lineDiv)
         out.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(int32Clamped(pV)))
         out.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(int32Clamped(pH)))
         out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)

@@ -38,6 +38,12 @@ final class ScrollAnimator: NSObject {
     private var carryH = 0.0
     private var lineCarryV = 0.0 // sub-line carry for the legacy line-delta field (link thread only)
     private var lineCarryH = 0.0
+    /// Output pixels that correspond to ONE legacy line — i.e. this glide's px-per-device-line
+    /// ratio, NOT the system's fixed 10 px/line. Smooth mode is accelerated (one notch can glide
+    /// 30–100 px), so dividing output pixels by 10 would report 3–10× the device's line count and
+    /// make line-based consumers (terminals) jump far more than the visible GUI motion. Updated by
+    /// the input paths under `lock`, snapshotted by `step` for `post`.
+    private var lineUnitPx = 10.0
     private var running = false
     private var lastTime = 0.0
     private var lastMotionTime = 0.0   // last frame/tick that actually moved — drives the gesture hold
@@ -172,6 +178,7 @@ final class ScrollAnimator: NSObject {
             if lineH != 0, (lineH > 0) != (remH > 0) { remH = 0; carryH = 0; velH = 0 }
             remV = clampDist(remV + lineV * dist)
             remH = clampDist(remH + lineH * dist)
+            lineUnitPx = dist // this step's px per device line, for the legacy line fields
             lastMotionTime = now
             let action = wakeActionLocked(now: now)
             lock.unlock()
@@ -211,6 +218,9 @@ final class ScrollAnimator: NSObject {
                                         swipeMinTickSpeed: profile.swipeMinTickSpeed)
         var px = ScrollTuning.pxPerTick(tickHz: analysis.tickHz, minSens: minSens, maxSens: maxSens)
         if accelerate, let speedup = profile.speedup { px *= speedup.factor(swipes: analysis.swipes) }
+        // Legacy-line ratio: this notch glides `px` output pixels for `|line|` device lines, so
+        // terminals should see exactly the device's line count once those pixels have drained.
+        lineUnitPx = max(1, px / max(abs(lineV), abs(lineH), 1))
 
         // Re-plan: unfinished distance rolls into the new glide (dropped at a sequence start, like
         // ) and the new plan takes off at the current glide speed — that continuity is the
@@ -256,6 +266,9 @@ final class ScrollAnimator: NSObject {
         let inst = mag / min(max(gap, 0.001), 0.2)
         pxInputSpeed = gap > 0.2 ? inst : pxInputSpeed * 0.7 + inst * 0.3
         let gain = ScrollAnimator.pixelGain(slider: speed, inputSpeed: pxInputSpeed)
+        // Native lines for this stream would be inputPx/10; our output is inputPx×gain, so one
+        // device line corresponds to 10×gain output pixels.
+        lineUnitPx = max(0.5, 10 * gain)
         omega = omegaSmooth
         clearPlanLocked()
         if mode == .momentum { momentumInterrupted = true; mode = .gesture; phaseStarted = false }
@@ -646,6 +659,7 @@ final class ScrollAnimator: NSObject {
         let emitStream = mode
         let hadBegun = phaseStarted
         let phaseless = phaselessStream
+        let lineUnit = lineUnitPx
         // Phase-less glides never open a stream — nothing to begin, nothing to end.
         if willEmit, !phaseless { phaseStarted = true }
         if finish { running = false; mode = .idle; phaseStarted = false }
@@ -672,10 +686,12 @@ final class ScrollAnimator: NSObject {
             if phaseless {
                 // Hi-res glide: a plain continuous event, phase fields zero — exactly what the
                 // mouse itself sends, so apps clamp at page edges instead of rubber-banding.
-                post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH, gesturePhase: 0)
+                post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH, gesturePhase: 0,
+                     lineUnit: lineUnit)
             } else if emitStream == .momentum {
                 post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH,
-                     gesturePhase: 0, momentumPhase: hadBegun ? momentumContinue : momentumBegan)
+                     gesturePhase: 0, momentumPhase: hadBegun ? momentumContinue : momentumBegan,
+                     lineUnit: lineUnit)
             } else {
                 // Real trackpads open a gesture with an EMPTY began frame; deltas arrive in
                 // `changed` frames. Some apps discard began's delta outright, which would eat the
@@ -686,13 +702,13 @@ final class ScrollAnimator: NSObject {
                     post(intV: 0, intH: 0, preciseV: 0, preciseH: 0, gesturePhase: phaseBegan)
                 }
                 post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH,
-                     gesturePhase: phaseChanged)
+                     gesturePhase: phaseChanged, lineUnit: lineUnit)
             }
         }
     }
 
     private func post(intV: Int32, intH: Int32, preciseV: Double, preciseH: Double,
-                      gesturePhase: Int64, momentumPhase: Int64 = 0) {
+                      gesturePhase: Int64, momentumPhase: Int64 = 0, lineUnit: Double = 10) {
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
                                   wheelCount: 2, wheel1: intV, wheel2: intH, wheel3: 0) else { return }
         // Mark continuous so apps treat it as trackpad-style smooth scrolling, not a wheel notch.
@@ -714,22 +730,25 @@ final class ScrollAnimator: NSObject {
         // last quantizes every frame to whole lines: slow glides then move in 0/±1 px lumps
         // (visible shaking) and everything scrolls ~10× slower than planned.
         // Field semantics copied from real trackpad events (and Mac Mouse Fix's long-proven
-        // synthesis): the line delta AND the fixed-point delta are both in LINE units (1 line
-        // ≈ 10 px) — fixed-point is the precise fractional line count, the integer field is
-        // its accumulated whole part. Only the POINT delta is in pixels; that's what
+        // synthesis): the line delta AND the fixed-point delta are both in LINE units —
+        // fixed-point is the precise fractional line count, the integer field is its
+        // accumulated whole part. Only the POINT delta is in pixels; that's what
         // `scrollingDeltaY` (GUI smoothness) reads on continuous events. Terminals build their
         // mouse reports from `deltaY` — the fixed-point field — so putting PIXELS there makes
         // a 47 px frame read as 47 LINES and floods vim/tmux with reports (`ESC[<65;…M`
-        // garbage). Write order still matters: line first, then fixed-point, then point (the
-        // line setter re-syncs the other two views).
-        lineCarryV += preciseV / 10
-        lineCarryH += preciseH / 10
+        // garbage). `lineUnit` is the glide's own px-per-device-line ratio (acceleration means
+        // one notch can glide 30–100 px): dividing by it makes the emitted line count equal
+        // the device's, so terminals jump the same few lines the wheel actually turned.
+        // Write order still matters: line first, then fixed-point, then point (the line setter
+        // re-syncs the other two views).
+        lineCarryV += preciseV / lineUnit
+        lineCarryH += preciseH / lineUnit
         let lv = lineCarryV.rounded(.towardZero); lineCarryV -= lv
         let lh = lineCarryH.rounded(.towardZero); lineCarryH -= lh
         event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lv))
         event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lh))
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV / 10)
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: preciseH / 10)
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV / lineUnit)
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: preciseH / lineUnit)
         event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(intV))
         event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(intH))
         // Stamp the phases so phase-aware apps (Safari) render a coherent gesture + coast, not jumps.

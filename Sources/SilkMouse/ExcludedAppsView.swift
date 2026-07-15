@@ -11,7 +11,7 @@ struct ExcludedAppsView: View {
             title: "Excluded apps",
             emptyLabel: "No excluded apps",
             addPrompt: "Exclude",
-            footer: "Scroll smoothing is turned off while the pointer is over these apps — the wheel behaves natively there. Reverse and scroll speed still apply.",
+            footer: "Scroll smoothing is turned off while the pointer is over these apps — the wheel behaves natively there. Reverse and scroll speed still apply. Terminal apps (Terminal, iTerm2, kitty, WezTerm, Ghostty, Alacritty, …) are always excluded: they translate scroll pixels into wheel reports, so a smooth glide would jump many text lines per notch. Warp is not excluded — it renders pixel scrolling natively.",
             bundleIDs: $store.config.excludedBundleIDs)
     }
 }
