@@ -22,7 +22,7 @@ fi
 
 APP_NAME="SilkMouse"
 BUNDLE_ID="com.silkmouse.app"
-VERSION="0.8.1"
+VERSION="0.8.2"
 OUT="build/${APP_NAME}.app"
 
 echo "==> swift build -c release"
