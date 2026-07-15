@@ -2,23 +2,21 @@ import AppKit
 import CoreGraphics
 import QuartzCore
 
-/// Trackpad-like smooth scrolling: a critically-damped spring glides toward an accumulated distance
-/// target, with an MMF-style momentum tail for flicks.
+/// Smooth scrolling with Mac Mouse Fix's scroll model (v3 "Regular" smoothness / LowInertia —
+/// snappy, short inertia tail), which is the feel this app targets in Smooth mode.
 ///
-/// Model (per axis): each wheel notch ADDS a distance to the remaining target; every frame a
-/// critically-damped spring (state = remaining distance + velocity, see `springAdvance`) moves toward
-/// that target. The spring is what makes consecutive notches feel like ONE continuous push instead of
-/// per-notch pulses: a new notch only moves the target — velocity carries over unchanged (the previous
-/// exponential-ease model jumped speed instantaneously on every notch) — and motion still stops exactly
-/// at the accumulated distance (no floaty over-coast, which Chromium/VS Code render as "khựng/trễ").
-/// A direction reversal drops target and velocity together so flipping is crisp.
+/// Smooth mode (wheel notches): every notch re-plans ONE glide (`MMFHybridPlan`, see
+/// MMFScrollMath.swift): tick rate → px for this notch (acceleration curve), + the previous glide's
+/// unfinished distance, covered by a short bezier whose initial slope equals the current glide
+/// speed (speed smoothing — no velocity jump on retarget) that hands off to a physical drag coast
+/// v' = −a·v^b down to a stop speed. Chained fast swipes multiply the distance exponentially
+/// (MMF "fast scroll"). The drag portion is labeled with momentum phases (like MMF's trackpad
+/// simulation) once the wheel has been quiet past the tick window, so phase-aware apps (Safari…)
+/// treat the coast natively; while ticks keep arriving everything stays one gesture stream.
 ///
-/// Momentum tail: when ticks stop arriving but the glide still has real speed + distance (a flick),
-/// the gesture stream is closed and the REST of the glide is emitted as momentum-phase events with a
-/// softer spring — the began→changed→ended, then momentum began→continue→ended shape of a real
-/// trackpad, so phase-aware apps (Safari elastic scrolling…) treat the coast natively. Total distance
-/// is unchanged, only the labeling and the tail's stretch differ; slow deliberate scrolling never
-/// qualifies (speed+distance gated) and keeps the exact stop.
+/// Smooth-step mode and hi-res pixel mice instead use a critically-damped spring toward an
+/// accumulated target (state = remaining distance + velocity, see `springAdvance`): crisp
+/// per-notch steps, exact stop, no coast.
 ///
 /// Smoothness plumbing:
 ///   • the glide is paced by a `CADisplayLink` on its own thread+run-loop (paused when idle — zero
@@ -54,7 +52,6 @@ final class ScrollAnimator: NSObject {
     private enum Stream { case idle, gesture, momentum }
     private var mode = Stream.idle
     private var momentumInterrupted = false // tick landed mid-coast → close momentum, reopen a gesture
-    private var steppedMode = false         // Smooth-step never hands off to momentum
 
     // Undocumented gesture/momentum-phase fields + values. Tagging our synthetic events as a coherent
     // stream (began → changed → ended, momentum began → continue → ended) is what makes phase-aware
@@ -74,82 +71,128 @@ final class ScrollAnimator: NSObject {
     private var linkDisplayID: CGDirectDisplayID = 0    // display the live link paces (0 = unknown)
     private var pendingDisplayID: CGDirectDisplayID = 0 // display the NEXT link should pace
 
-    // Scroll tuning — distance accumulator + critically-damped spring. Each notch ADDS a fixed
-    // distance to the remaining target; the spring (see `springAdvance`) glides there with continuous
-    // velocity, so per-frame deltas ease in AND out (no per-notch pulsing) while motion still stops
-    // exactly at the accumulated distance (keeps the "khựng/giật + trễ" fix for Chromium/VS Code,
-    // whose own velocity trackers hated spike-then-decay deltas).
-    private let pixelsPerNotch = 70.0 // Smooth: distance one notch contributes at speed 1.0 (× `speed`)
+    // Spring tuning (Smooth-step + hi-res pixel paths).
     private let pixelsPerLine = 30.0  // Smooth-step: pixels per "line" of the fixed N-line notch step
     private var omega = 26.0          // rad/s — current spring stiffness (set per tick by the mode)
-    private let omegaSmooth = 26.0    // settles a step in ~0.18 s — trackpad-like
+    private let omegaSmooth = 26.0    // hi-res pixels: settles a burst in ~0.18 s — trackpad-like
     private let omegaStep = 40.0      // crisp: ~0.12 s so each notch lands as a discrete step
-    private let omegaMomentum = 10.0  // soft: stretches a flick's tail into a longer coast
     private let maxRemaining = 6000.0 // px clamp so a fast spin can't accumulate an absurd target
     private let stopDistance = 0.1    // px; together with `stopSpeed`, flushes the final sliver
     private let stopSpeed = 20.0      // px/s; below BOTH thresholds the glide settles
-    // Momentum handoff — a flick is "a RAPID input burst that went quiet while the glide is still
-    // moving with a real backlog". The last inter-tick gap and the backlog AT the last tick are the
-    // discriminators that survive spring drain during the silence window (current-`rem` gates don't:
-    // the spring drains ~78%/100 ms, so any at-check distance gate is either dead or hair-trigger).
-    // Steady deliberate ticking (gaps ≳ 0.1 s) never qualifies at any speed — it keeps the exact
-    // stop — while ending a fast burst/spin gets the trackpad-style coast. See `shouldStartMomentum`.
-    private static let momentumGap = 0.10         // s of input silence before the coast can start
-    private static let flickMaxGap = 0.08         // s — the burst's last inter-tick gap must be rapid
-    private static let momentumMinSpeed = 350.0   // px/s the glide must still be doing at handoff
-    private static let momentumMinBacklog = 80.0 // px still queued when the burst ended — low enough
-                                                 // that accel-OFF flicks (steady-state backlog ≈88 px)
-                                                 // still coast; two quick default-speed notches (~80 px)
-                                                 // stay just under
 
-    // Acceleration: rapid consecutive notches in the same direction multiply each notch's distance, so a
-    // fast flick travels much farther than slow, deliberate clicks (MMF-style "scroll speedup").
-    private var lastTickTime = 0.0    // when the previous notch arrived (for the inter-tick gap)
-    private var lastTickGap = Double.infinity // gap between the last two input events (flick detector)
-    private var backlogAtTick = 0.0   // max |rem| right after the last input event landed
-    private var lastTickDir = 0       // sign of the previous notch's dominant axis (for reset on reversal)
-    private var lastTickAxisIsV = true // axis of the previous notch — the ramp must not carry across axes
-    private var accel = 1.0           // current speedup multiplier (1.0 = none)
-    private static let accelGap = 0.18  // s; notches closer than this ramp the multiplier up
-    private static let accelStep = 0.28 // multiplier added per consecutive fast notch
-    private static let accelMax = 2.05  // ceiling so a fast spin can't fling absurdly far
+    // MMF glide (Smooth wheel mode) — see MMFScrollMath.swift. One 1-D plan at a time (a wheel
+    // ticks one axis per event; an axis or direction change starts a fresh plan from rest).
+    private var mmfAnalyzer = MMFTickAnalyzer()
+    private var plan: MMFHybridPlan?
+    private var planStart = 0.0      // when the CURRENT plan started (reset on every notch)
+    private var planRate = 1.0       // >1 compresses a fast-scroll plan into `maxDuration` wall time
+    private var planPrevTime = 0.0   // plan-time of the previous frame (momentum labeling needs it)
+    private var planEmitted = 0.0    // px of the plan already posted (absolute)
+    private var planAxisIsV = true
+    private var planSign = 1.0
+    private let planMaxDistance = 100_000.0 // px cap (fast scroll is exponential; MMF caps similarly)
 
-    /// Feed a wheel notch (line deltas, already direction-corrected). In Smooth-step mode each notch is
-    /// a fixed `lines`-line step with a crisp ease and no coast; otherwise `speed` scales a momentum glide.
+    // Hi-res pixel path (addPixels) — free-spin safety.
+    private var pxInputSpeed = 0.0     // smoothed incoming px/s of the raw device stream
+    private var pxLastInputTime = 0.0
+    private static let pixelMaxRemaining = 2000.0 // px backlog cap (wheel spring keeps 6000)
+    // Hi-res glides emit PHASE-LESS continuous events (gesture/momentum fields zero), matching what
+    // the mouse itself sends. Phase-tagged streams let apps rubber-band PAST the page edge — a fast
+    // free-spin overscrolls into blank space and snaps back ("content vanishes, then reappears").
+    // Phase-less events clamp hard at the edge like native mouse scrolling. Wheel glides keep the
+    // phased trackpad stream (per-notch smoothness in phase-aware apps).
+    private var phaselessStream = false
+
+    // Hard ceiling on the emitted scroll speed, both glide models. Whatever the input does — a
+    // flywheel at full spin, a fast-scroll multiplied wheel burst — the view never moves faster
+    // than this; the excess drains later (plan/spring keep the backlog) or is dropped at the
+    // backlog clamps. ~3 screenfuls per second: fast enough to fling, slow enough to track.
+    private static let maxOutputSpeed = 6000.0 // px/s
+
+    /// Gain for hi-res pixel input. The slider's perceptual curve (0.5 → 1.0 = native, capped ×3)
+    /// applies fully to slow/deliberate scrolling; above a knee, the EXCESS input speed passes at
+    /// 1:1 — a free-spinning flywheel (MX Master 3 SmartShift) carries its own hardware momentum,
+    /// and multiplying it flings the view far past the page. The soft-knee keeps output speed
+    /// MONOTONIC in input speed (out = g·min(in, knee) + max(in − knee, 0)): a plain speed-fade
+    /// here made the output ACCELERATE while the flywheel decayed through the fade band — the
+    /// "speeds up mid-coast" artifact. Slow-down gains (< 1) apply as-is; they can't overshoot.
+    static func pixelGain(slider: Double, inputSpeed: Double) -> Double {
+        let full = min(pow(slider / 0.5, 1.7), 3.0)
+        guard full > 1, inputSpeed > pixelGainKnee else { return full }
+        return (full * pixelGainKnee + (inputSpeed - pixelGainKnee)) / inputSpeed
+    }
+    private static let pixelGainKnee = 800.0 // px/s of input speed that still gets the full gain
+
+    /// Caller must hold `lock`.
+    private func clearPlanLocked() {
+        plan = nil
+        planEmitted = 0
+        planPrevTime = 0
+        planRate = 1
+    }
+
+    /// Feed a wheel notch (line deltas, already direction-corrected). In Smooth-step mode each notch
+    /// is a fixed `lines`-line spring step with a crisp ease and no coast; in Smooth mode the notch
+    /// re-plans an MMF hybrid glide (`speed` = sensitivity slider, `accelerate` = fast scroll).
     func addTick(lineV: Double, lineH: Double, speed: Double, stepped: Bool, lines: Int, accelerate: Bool) {
         let now = CACurrentMediaTime()
-        var dist = stepped ? Double(lines) * pixelsPerLine : pixelsPerNotch * speed
+
+        if stepped {
+            let dist = Double(lines) * pixelsPerLine
+            lock.lock()
+            omega = omegaStep
+            phaselessStream = false
+            clearPlanLocked()
+            if mode == .momentum { momentumInterrupted = true; mode = .gesture; phaseStarted = false }
+            // Reversing direction: drop the opposing remainder AND velocity so the flip is immediate.
+            if lineV != 0, (lineV > 0) != (remV > 0) { remV = 0; carryV = 0; velV = 0 }
+            if lineH != 0, (lineH > 0) != (remH > 0) { remH = 0; carryH = 0; velH = 0 }
+            remV = clampDist(remV + lineV * dist)
+            remH = clampDist(remH + lineH * dist)
+            lastMotionTime = now
+            let action = wakeActionLocked(now: now)
+            lock.unlock()
+            runWakeAction(action)
+            return
+        }
+
+        let axisIsV = lineV != 0
+        let sign: Double = axisIsV ? (lineV > 0 ? 1 : -1) : (lineH > 0 ? 1 : -1)
+        let sens = MMFScrollTuning.sensitivity(slider: speed)
 
         lock.lock()
-        steppedMode = stepped
-        omega = stepped ? omegaStep : omegaSmooth
+        phaselessStream = false
+        // The plan drives Smooth motion; any spring leftovers (mode switch mid-glide) would double-post.
+        remV = 0; remH = 0; velV = 0; velH = 0
         // A tick mid-coast "catches" the glide, like touching a coasting trackpad: close the momentum
         // stream (posted by the link thread) and reopen a gesture. Velocity carries over — no stutter.
         if mode == .momentum { momentumInterrupted = true; mode = .gesture; phaseStarted = false }
-        // Acceleration applies to momentum (Smooth) only — Smooth-step's fixed N-line step must stay
-        // constant per notch. Ramp the multiplier on rapid same-direction notches; reset otherwise
-        // (a reversal or an axis change must not inherit the ramp).
-        if accelerate && !stepped {
-            let axisIsV = lineV != 0
-            let dir = axisIsV ? (lineV > 0 ? 1 : -1) : (lineH > 0 ? 1 : -1)
-            accel = ScrollAnimator.nextAccel(current: accel, gap: now - lastTickTime,
-                                             sameDir: dir == lastTickDir && axisIsV == lastTickAxisIsV)
-            lastTickDir = dir
-            lastTickAxisIsV = axisIsV
-            dist *= accel
-        } else {
-            accel = 1.0
+
+        // Tick rate → px for this notch; chained fast swipes multiply it (MMF fast scroll).
+        let analysis = mmfAnalyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2))
+        var px = MMFScrollTuning.pxPerTick(tickHz: analysis.tickHz,
+                                           minSens: sens.minSens, maxSens: sens.maxSens)
+        if accelerate { px *= MMFSpeedupCurve.regular.factor(swipes: analysis.swipes) }
+
+        // Re-plan: unfinished distance rolls into the new glide (dropped at a sequence start, like
+        // MMF) and the new plan takes off at the current glide speed — that continuity is the
+        // "speed smoothing" that makes consecutive notches feel like one push.
+        var leftover = 0.0
+        var v0 = 0.0
+        if let p = plan, planAxisIsV == axisIsV, planSign == sign {
+            let planTime = min((now - planStart) * planRate, p.duration)
+            if !analysis.isSequenceStart { leftover = max(p.total - planEmitted, 0) }
+            v0 = p.speed(at: planTime) * planRate
         }
-        lastTickGap = now - lastTickTime
-        lastTickTime = now
-        // Reversing direction: drop the opposing remainder AND velocity so the flip is immediate.
-        // Also break the burst rhythm — otherwise a quick flip inherits the old direction's rapid
-        // lastTickGap and a SINGLE reversed notch can qualify as a "flick" and coast.
-        if lineV != 0, (lineV > 0) != (remV > 0) { remV = 0; carryV = 0; velV = 0; lastTickGap = .infinity }
-        if lineH != 0, (lineH > 0) != (remH > 0) { remH = 0; carryH = 0; velH = 0; lastTickGap = .infinity }
-        remV = clampDist(remV + lineV * dist)
-        remH = clampDist(remH + lineH * dist)
-        backlogAtTick = max(abs(remV), abs(remH))
+        let p = MMFHybridPlan(distance: min(leftover + px, planMaxDistance), initialSpeed: v0)
+        plan = p
+        planStart = now
+        planPrevTime = 0
+        planEmitted = 0
+        planRate = max(1.0, p.duration / MMFScrollTuning.maxDuration)
+        planAxisIsV = axisIsV
+        planSign = sign
+        if analysis.isSequenceStart { carryV = 0; carryH = 0 }
         lastMotionTime = now
         let action = wakeActionLocked(now: now)
         lock.unlock()
@@ -163,28 +206,29 @@ final class ScrollAnimator: NSObject {
     /// total distance is preserved (scaled by `speed`), just spread over the ease window.
     func addPixels(pxV: Double, pxH: Double, speed: Double) {
         let now = CACurrentMediaTime()
-        // Perceptual gain curve: 0.5 (slider default) → 1.0 = native magnitude, with SUB-LINEAR
-        // reach below it. Hi-res mice natively scroll fast, and an MMF-like slow pace needs gains
-        // down to a few % of native — a linear map can't get there without wrecking the slider's
-        // top half. Exponent tuned by feel; top capped at the previous linear maximum (3×).
-        let gain = min(pow(speed / 0.5, 1.7), 3.0)
 
         lock.lock()
-        steppedMode = false
+        phaselessStream = true
+        // Measure the incoming stream's speed (px/s, exponentially smoothed) — the free-spin
+        // detector. A long idle gap starts the estimate fresh.
+        let mag = max(abs(pxV), abs(pxH))
+        let gap = now - pxLastInputTime
+        pxLastInputTime = now
+        let inst = mag / min(max(gap, 0.001), 0.2)
+        pxInputSpeed = gap > 0.2 ? inst : pxInputSpeed * 0.7 + inst * 0.3
+        let gain = ScrollAnimator.pixelGain(slider: speed, inputSpeed: pxInputSpeed)
         omega = omegaSmooth
+        clearPlanLocked()
         if mode == .momentum { momentumInterrupted = true; mode = .gesture; phaseStarted = false }
         if pxV != 0, (pxV > 0) != (remV > 0) { remV = 0; carryV = 0; velV = 0 }
         if pxH != 0, (pxH > 0) != (remH > 0) { remH = 0; carryH = 0; velH = 0 }
-        remV = clampDist(remV + pxV * gain)
-        remH = clampDist(remH + pxH * gain)
-        backlogAtTick = max(abs(remV), abs(remH))
-        // Pixel input is NEVER flick-eligible: a hi-res mouse delivers each physical notch as a
-        // BURST of events a few ms apart, so the inter-event gap can't tell a rapid flick from one
-        // slow notch — the handoff would fire between ordinary notches and the next notch would
-        // interrupt it, an ended→momentum→ended→began churn per notch that renders as visible
-        // stutter. The spring's own tail already smooths the end of a fast hi-res swipe.
-        lastTickGap = .infinity
-        lastTickTime = now
+        // Tighter clamp than the wheel paths: when the user stops a free-spinning wheel by hand,
+        // whatever is queued here still drains — keep that "extra glide" bounded to ~a screenful.
+        remV = min(max(remV + pxV * gain, -ScrollAnimator.pixelMaxRemaining), ScrollAnimator.pixelMaxRemaining)
+        remH = min(max(remH + pxH * gain, -ScrollAnimator.pixelMaxRemaining), ScrollAnimator.pixelMaxRemaining)
+        // Pixel input never coasts: a hi-res mouse delivers each physical notch as a BURST of events
+        // a few ms apart, so inter-event gaps can't tell a flick from one slow notch. The spring's
+        // own tail already smooths the end of a fast hi-res swipe.
         lastMotionTime = now
         let action = wakeActionLocked(now: now)
         lock.unlock()
@@ -227,26 +271,6 @@ final class ScrollAnimator: NSObject {
         }
     }
 
-    /// Pure speedup-curve step (extracted so it's unit-testable): a notch within `accelGap` of the
-    /// previous one AND in the same direction bumps the multiplier by `accelStep` up to `accelMax`;
-    /// any slow or reversed notch resets to 1.0.
-    static func nextAccel(current: Double, gap: Double, sameDir: Bool) -> Double {
-        guard sameDir, gap < accelGap else { return 1.0 }
-        return min(accelMax, current + accelStep)
-    }
-
-    /// Pure momentum-handoff predicate (extracted so it's unit-testable): hand the glide off to the
-    /// momentum stream once the input has been quiet for `momentumGap` — but only when the quiet
-    /// followed a rapid burst (`lastGap`), the glide is still moving (`speed`), and the burst left a
-    /// real backlog behind (`backlog`, measured AT the last tick, before the spring drained it).
-    /// Smooth-step never coasts — its notches are discrete steps by definition.
-    static func shouldStartMomentum(silence: Double, lastGap: Double, speed: Double,
-                                    backlog: Double, stepped: Bool) -> Bool {
-        guard !stepped else { return false }
-        return silence > momentumGap && lastGap < flickMaxGap
-            && speed > momentumMinSpeed && backlog > momentumMinBacklog
-    }
-
     /// Close any in-flight glide/gesture immediately and reset, so the NEXT scroll opens a fresh
     /// `began`. A smooth gesture that spans a Space switch gets orphaned (the new Space's window never
     /// saw its `began`) and is ignored until a fresh one starts — forcing that fresh start here is the
@@ -265,6 +289,9 @@ final class ScrollAnimator: NSObject {
         phaseStarted = false
         momentumInterrupted = false
         remV = 0; remH = 0; carryV = 0; carryH = 0; velV = 0; velH = 0
+        phaselessStream = false
+        clearPlanLocked()
+        mmfAnalyzer.reset()
         lock.unlock()
 
         guard openStream != .idle, let rl else { return } // nothing open → nothing to close
@@ -401,6 +428,9 @@ final class ScrollAnimator: NSObject {
         linkDisplayID = 0
         running = false
         remV = 0; remH = 0; carryV = 0; carryH = 0; velV = 0; velH = 0
+        phaselessStream = false
+        clearPlanLocked()
+        mmfAnalyzer.reset()
         mode = .idle
         phaseStarted = false
         momentumInterrupted = false
@@ -452,6 +482,7 @@ final class ScrollAnimator: NSObject {
             if thread === Thread.current { // don't clobber a replacement spawned after a rebuild
                 thread = nil; running = false
                 remV = 0; remH = 0; velV = 0; velH = 0; carryV = 0; carryH = 0
+                clearPlanLocked()
                 mode = .idle; phaseStarted = false; momentumInterrupted = false
                 stallRetries = 0
             }
@@ -491,33 +522,65 @@ final class ScrollAnimator: NSObject {
         lastStepTime = now // the link is alive — stand the stall watchdog down
         stallRetries = 0
 
-        // Momentum handoff: a rapid burst went quiet but the glide still carries real speed — that's
-        // a flick's tail. Close the gesture stream and relabel the rest as momentum events (what a
-        // trackpad does when the fingers lift), softening the spring so the coast stretches.
-        var closeGesture = false
-        if mode == .gesture, phaseStarted,
-           ScrollAnimator.shouldStartMomentum(silence: now - lastTickTime, lastGap: lastTickGap,
-                                              speed: max(abs(velV), abs(velH)),
-                                              backlog: backlogAtTick, stepped: steppedMode) {
-            closeGesture = true
-            mode = .momentum
-            phaseStarted = false
-            omega = omegaMomentum
-        }
         // A fresh tick landed mid-coast (flagged in addTick/addPixels): close the momentum stream
         // before emitting, so the new gesture opens cleanly — momentum-ended → began, exactly the
         // "catch a coasting trackpad" event sequence.
         let closeMomentum = momentumInterrupted
         momentumInterrupted = false
 
-        let (dV, newRemV, newVelV) = ScrollAnimator.springAdvance(
-            remaining: remV, velocity: velV, dt: dt, omega: omega,
-            stopDistance: stopDistance, stopSpeed: stopSpeed)
-        let (dH, newRemH, newVelH) = ScrollAnimator.springAdvance(
-            remaining: remH, velocity: velH, dt: dt, omega: omega,
-            stopDistance: stopDistance, stopSpeed: stopSpeed)
-        remV = newRemV; velV = newVelV
-        remH = newRemH; velH = newVelH
+        var dV = 0.0, dH = 0.0
+        var wantMomentum = false
+        let maxFrameD = ScrollAnimator.maxOutputSpeed * dt // speed ceiling, as px for THIS frame
+        if let p = plan {
+            // MMF glide: sample the plan at (wall time since the last re-plan) × compression rate.
+            // Advance at most 50 ms of plan time per frame (the plan-path twin of the spring's dt
+            // clamp): across a sleep/stall the mach clock can jump far ahead of the last frame,
+            // and an unclamped sample would dump the glide's whole backlog as one violent frame.
+            let planTime = min((now - planStart) * planRate,
+                               planPrevTime + 0.05 * planRate,
+                               p.duration)
+            // Speed ceiling: emit at most maxFrameD; `planEmitted` tracks what was POSTED, so any
+            // capped excess simply drains over the following frames — distance is never lost.
+            let d = min(max(p.distance(at: planTime) - planEmitted, 0), maxFrameD)
+            planEmitted += d
+            if planAxisIsV { dV = d * planSign } else { dH = d * planSign }
+            // Momentum labeling (MMF trackpad sim): the drag coast is momentum, but only after the
+            // wheel has been quiet past the tick window (each notch resets `planStart`) and only
+            // for frames that lie ENTIRELY inside the drag portion — so steady ticking stays one
+            // gesture stream instead of churning ended→momentum→began between notches.
+            wantMomentum = (now - planStart) >= MMFScrollTuning.tickIntervalMax
+                && p.inDragPhase(at: planPrevTime) && p.inDragPhase(at: planTime)
+            planPrevTime = planTime
+            // Drained (fully emitted, not merely past the end time — the ceiling may still be
+            // draining a capped backlog); the finish path closes the stream.
+            if planTime >= p.duration, p.total - planEmitted < 0.5 { clearPlanLocked() }
+        } else {
+            let (sV, newRemV, newVelV) = ScrollAnimator.springAdvance(
+                remaining: remV, velocity: velV, dt: dt, omega: omega,
+                stopDistance: stopDistance, stopSpeed: stopSpeed)
+            let (sH, newRemH, newVelH) = ScrollAnimator.springAdvance(
+                remaining: remH, velocity: velH, dt: dt, omega: omega,
+                stopDistance: stopDistance, stopSpeed: stopSpeed)
+            dV = sV; remV = newRemV; velV = newVelV
+            dH = sH; remH = newRemH; velH = newVelH
+            // Speed ceiling: hand any excess back to the spring's target so it drains later.
+            if abs(dV) > maxFrameD {
+                let capped = dV > 0 ? maxFrameD : -maxFrameD
+                remV += dV - capped; dV = capped
+            }
+            if abs(dH) > maxFrameD {
+                let capped = dH > 0 ? maxFrameD : -maxFrameD
+                remH += dH - capped; dH = capped
+            }
+        }
+
+        // Hand the open gesture stream off to momentum when the glide enters its coast.
+        var closeGesture = false
+        if mode == .gesture, phaseStarted, wantMomentum {
+            closeGesture = true
+            mode = .momentum
+            phaseStarted = false
+        }
 
         let moving = dV != 0 || dH != 0
         var iV = 0.0, iH = 0.0
@@ -535,7 +598,9 @@ final class ScrollAnimator: NSObject {
         let willEmit = moving
         let emitStream = mode
         let hadBegun = phaseStarted
-        if willEmit { phaseStarted = true }
+        let phaseless = phaselessStream
+        // Phase-less glides never open a stream — nothing to begin, nothing to end.
+        if willEmit, !phaseless { phaseStarted = true }
         if finish { running = false; mode = .idle; phaseStarted = false }
         lock.unlock()
 
@@ -557,7 +622,11 @@ final class ScrollAnimator: NSObject {
             }
             link.isPaused = true // pause (not tear down) → zero CPU until the next tick
         } else if willEmit {
-            if emitStream == .momentum {
+            if phaseless {
+                // Hi-res glide: a plain continuous event, phase fields zero — exactly what the
+                // mouse itself sends, so apps clamp at page edges instead of rubber-banding.
+                post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH, gesturePhase: 0)
+            } else if emitStream == .momentum {
                 post(intV: Int32(iV), intH: Int32(iH), preciseV: dV, preciseH: dH,
                      gesturePhase: 0, momentumPhase: hadBegun ? momentumContinue : momentumBegan)
             } else {

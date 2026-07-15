@@ -139,71 +139,238 @@ final class ScrollMathTests: XCTestCase {
                           drain(target: 200, dt: 1.0 / 60, omega: 26).frames)
     }
 
-    // MARK: - Momentum handoff predicate
+    // MARK: - Hi-res pixel gain (free-spin safety)
 
-    /// A flick — rapid burst, then silence, still fast, real backlog — hands off to momentum.
-    func testMomentumFiresOnFlick() {
-        XCTAssertTrue(ScrollAnimator.shouldStartMomentum(
-            silence: 0.12, lastGap: 0.05, speed: 800, backlog: 300, stepped: false))
+    /// Slow, deliberate hi-res scrolling gets the slider's full gain.
+    func testPixelGainFullWhenSlow() {
+        XCTAssertEqual(ScrollAnimator.pixelGain(slider: 1.5, inputSpeed: 300), 3.0, accuracy: 1e-9)
+        XCTAssertEqual(ScrollAnimator.pixelGain(slider: 0.5, inputSpeed: 300), 1.0, accuracy: 1e-9)
     }
 
-    /// Steady deliberate ticking (inter-tick gaps ≳ 0.1 s) must NEVER coast, at any speed —
-    /// that's the exact-stop guarantee for slow scrolling.
-    func testMomentumBlockedDuringSteadyTicking() {
-        XCTAssertFalse(ScrollAnimator.shouldStartMomentum(
-            silence: 0.12, lastGap: 0.12, speed: 2000, backlog: 500, stepped: false))
+    /// Above the knee, the excess input speed passes 1:1: amplification of a free-spinning
+    /// flywheel is bounded (out ≤ in + knee·(g−1)) and the OUTPUT speed is monotonic in the
+    /// input speed — a decaying flywheel must never make the view speed UP mid-coast.
+    func testPixelGainKneeBoundedAndMonotonic() {
+        let knee = 800.0, g = 3.0
+        var prevOut = 0.0
+        for inSpeed in stride(from: 100.0, through: 20_000.0, by: 100.0) {
+            let out = inSpeed * ScrollAnimator.pixelGain(slider: 1.5, inputSpeed: inSpeed)
+            XCTAssertGreaterThan(out, prevOut, "output speed must rise with input speed")
+            XCTAssertLessThanOrEqual(out, inSpeed + knee * (g - 1) + 1e-6,
+                                     "flywheel amplification must stay bounded")
+            prevOut = out
+        }
+        // Asymptotically native: at very high spin the gain approaches ×1.
+        XCTAssertLessThan(ScrollAnimator.pixelGain(slider: 1.5, inputSpeed: 50_000), 1.05)
     }
 
-    /// While ticks are still arriving (no real silence yet), no handoff — the gesture continues.
-    func testMomentumBlockedWhileTicksStillArriving() {
-        XCTAssertFalse(ScrollAnimator.shouldStartMomentum(
-            silence: 0.05, lastGap: 0.05, speed: 800, backlog: 300, stepped: false))
+    /// Slow-down gains (slider below default) reduce distance and can't overshoot — never faded.
+    func testPixelGainSlowdownNeverFaded() {
+        let slow = ScrollAnimator.pixelGain(slider: 0.25, inputSpeed: 300)
+        XCTAssertLessThan(slow, 1.0)
+        XCTAssertEqual(ScrollAnimator.pixelGain(slider: 0.25, inputSpeed: 10_000), slow, accuracy: 1e-12)
+    }
+}
+
+/// Guards the MMF scroll model (MMFScrollMath.swift) that drives Smooth mode: acceleration curve,
+/// fast-scroll speedup, drag physics, hybrid plan, and tick/swipe analysis.
+final class MMFScrollMathTests: XCTestCase {
+
+    // MARK: - Acceleration curve (tick rate → px per notch)
+
+    /// Slow single ticks sit at minSens; the fastest ticking reaches maxSens; in between is linear.
+    func testAccelerationCurveEndpoints() {
+        XCTAssertEqual(MMFScrollTuning.pxPerTick(tickHz: 1, minSens: 90, maxSens: 180), 90)
+        XCTAssertEqual(MMFScrollTuning.pxPerTick(tickHz: 6.25, minSens: 90, maxSens: 180), 90, accuracy: 1e-9)
+        XCTAssertEqual(MMFScrollTuning.pxPerTick(tickHz: 1 / 0.015, minSens: 90, maxSens: 180), 180,
+                       accuracy: 1e-9)
+        let mid = MMFScrollTuning.pxPerTick(tickHz: (6.25 + 1 / 0.015) / 2, minSens: 90, maxSens: 180)
+        XCTAssertEqual(mid, 135, accuracy: 1e-6)
     }
 
-    /// A single notch's "last gap" is the huge pause before it — never a flick.
-    func testMomentumBlockedForSingleNotch() {
-        XCTAssertFalse(ScrollAnimator.shouldStartMomentum(
-            silence: 0.12, lastGap: 5.0, speed: 800, backlog: 300, stepped: false))
+    /// Speed slider maps to MMF's low/medium/high sensitivity anchors and extends beyond 1.0.
+    func testSensitivityMapping() {
+        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 0).minSens, 30)
+        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 0.5).minSens, 60)
+        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 0.5).maxSens, 120)
+        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 1).maxSens, 180)
+        XCTAssertGreaterThan(MMFScrollTuning.sensitivity(slider: 1.5).maxSens, 180)
     }
 
-    /// Too slow or too shallow a backlog → settle exactly, no coast label.
-    func testMomentumBlockedWhenSlowOrShallow() {
-        XCTAssertFalse(ScrollAnimator.shouldStartMomentum(
-            silence: 0.12, lastGap: 0.05, speed: 200, backlog: 300, stepped: false))
-        XCTAssertFalse(ScrollAnimator.shouldStartMomentum(
-            silence: 0.12, lastGap: 0.05, speed: 800, backlog: 50, stepped: false))
+    // MARK: - Fast-scroll speedup
+
+    /// No speedup below the swipe threshold; the first step is ×initialSpeedup; growth is monotonic.
+    func testSpeedupCurve() {
+        let c = MMFSpeedupCurve.regular
+        XCTAssertEqual(c.factor(swipes: 0), 1.0)
+        XCTAssertEqual(c.factor(swipes: 2), 1.0) // swipes+1 == 3 == threshold → still exactly 1.0
+        XCTAssertEqual(c.factor(swipes: 3), 1.33, accuracy: 1e-9)
+        var prev = 1.0
+        for s in 0...12 {
+            let f = c.factor(swipes: Double(s))
+            XCTAssertGreaterThanOrEqual(f, prev)
+            prev = f
+        }
+        XCTAssertLessThanOrEqual(c.factor(swipes: 500), 100_000)
     }
 
-    /// Smooth-step mode never coasts — its notches are discrete steps by definition.
-    func testMomentumNeverInSteppedMode() {
-        XCTAssertFalse(ScrollAnimator.shouldStartMomentum(
-            silence: 0.12, lastGap: 0.05, speed: 800, backlog: 300, stepped: true))
+    // MARK: - Drag segment (v' = −a·v^b)
+
+    /// The closed forms must be self-consistent: distance(duration) == distance, speed decays
+    /// from v0 to stopSpeed, and distance(t) is monotonic — for exponents both < 1 (MMF High:
+    /// 0.7) and > 1 (MMF Regular: 1.05).
+    func testDragSegmentSelfConsistent() throws {
+        for (a, b) in [(40.0, 0.7), (15.0, 1.05)] {
+            let d = try XCTUnwrap(MMFDragSegment(initialSpeed: 800, a: a, b: b, stopSpeed: 30))
+            XCTAssertEqual(d.speed(at: 0), 800, accuracy: 1e-6)
+            XCTAssertEqual(d.speed(at: d.duration), 30, accuracy: 1e-6)
+            XCTAssertEqual(d.speed(at: d.duration * 2), 30, accuracy: 1e-6, "clamp past the end")
+            XCTAssertEqual(d.distance(at: d.duration), d.distance, accuracy: 1e-9)
+            var prev = 0.0
+            for i in 0...50 {
+                let t = d.duration * Double(i) / 50
+                let x = d.distance(at: t)
+                XCTAssertGreaterThanOrEqual(x, prev - 1e-9, "monotonic (b=\(b))")
+                prev = x
+            }
+        }
     }
 
-    // MARK: - Acceleration (speedup) curve
-
-    /// A fast same-direction notch ramps the multiplier up; it never exceeds the ceiling.
-    func testAccelRampsUpAndCaps() {
-        var a = 1.0
-        for _ in 0..<20 { a = ScrollAnimator.nextAccel(current: a, gap: 0.05, sameDir: true) }
-        XCTAssertGreaterThan(a, 1.0)
-        XCTAssertLessThanOrEqual(a, 2.05 + 1e-9, "must not exceed accelMax")
+    /// The distance-based init must produce a segment covering exactly the requested distance.
+    func testDragSegmentFromDistance() {
+        for (a, b) in [(40.0, 0.7), (15.0, 1.05)] {
+            let d = MMFDragSegment(distance: 500, a: a, b: b, stopSpeed: 30)
+            XCTAssertEqual(d.distance, 500, accuracy: 1e-6)
+            XCTAssertGreaterThan(d.v0, 30)
+        }
     }
 
-    /// A slow notch (large gap) resets the multiplier to 1.0 even at high current value.
-    func testAccelResetsOnSlowTick() {
-        XCTAssertEqual(ScrollAnimator.nextAccel(current: 2.5, gap: 1.0, sameDir: true), 1.0, accuracy: 1e-9)
+    /// Slower initial speeds coast shorter — the physical sanity check. Regular's steeper
+    /// exponent (b=1.05, a=15) must also coast shorter than High's (b=0.7, a=40) at high speed.
+    func testDragSlowerCoastsShorter() throws {
+        let fast = try XCTUnwrap(MMFDragSegment(initialSpeed: 2000, a: 15, b: 1.05, stopSpeed: 30))
+        let slow = try XCTUnwrap(MMFDragSegment(initialSpeed: 400, a: 15, b: 1.05, stopSpeed: 30))
+        XCTAssertGreaterThan(fast.distance, slow.distance)
+        XCTAssertGreaterThan(fast.duration, slow.duration)
+        let high = try XCTUnwrap(MMFDragSegment(initialSpeed: 2000, a: 40, b: 0.7, stopSpeed: 30))
+        XCTAssertLessThan(fast.duration, high.duration, "Regular tail must be shorter than High's")
     }
 
-    /// Reversing direction resets the multiplier even when ticks are fast.
-    func testAccelResetsOnDirectionChange() {
-        XCTAssertEqual(ScrollAnimator.nextAccel(current: 2.0, gap: 0.05, sameDir: false), 1.0, accuracy: 1e-9)
+    // MARK: - Hybrid plan
+
+    /// The plan must cover exactly the requested distance (within the search epsilon), monotonically.
+    func testPlanCoversRequestedDistance() {
+        for distance in [90.0, 250.0, 1200.0, 8000.0] {
+            for v0 in [0.0, 400.0, 3000.0] {
+                let p = MMFHybridPlan(distance: distance, initialSpeed: v0)
+                XCTAssertEqual(p.distance(at: p.duration), distance, accuracy: 1e-6,
+                               "end must land exactly on the target (d=\(distance), v0=\(v0))")
+                XCTAssertEqual(p.total, distance)
+                var prev = 0.0
+                for i in 0...100 {
+                    let x = p.distance(at: p.duration * Double(i) / 100)
+                    XCTAssertGreaterThanOrEqual(x, prev - 1e-6, "distance must be monotonic")
+                    prev = x
+                }
+            }
+        }
     }
 
-    /// One fast tick from rest grows the multiplier above 1.0 but stays modest.
-    func testAccelSingleFastTick() {
-        let a = ScrollAnimator.nextAccel(current: 1.0, gap: 0.05, sameDir: true)
-        XCTAssertGreaterThan(a, 1.0)
-        XCTAssertLessThan(a, 2.0)
+    /// Speed smoothing (the mechanism — Regular ships with smoothing 0, so pass it explicitly):
+    /// the plan takes off at (about) the incoming glide speed.
+    func testPlanStartsAtIncomingSpeed() {
+        let v0 = 900.0
+        let p = MMFHybridPlan(distance: 400, initialSpeed: v0, smoothing: 0.15)
+        XCTAssertEqual(p.speed(at: 0), v0, accuracy: v0 * 0.02,
+                       "initial speed must match the incoming glide speed")
+    }
+
+    /// Softened-Regular single notch: eases in from rest (speed smoothing), ends in a moderate
+    /// drag coast decaying to the stop speed — smooth but still responsive, no long float.
+    func testPlanFromRestEasesInWithShortTail() {
+        let p = MMFHybridPlan(distance: 60, initialSpeed: 0)
+        XCTAssertLessThan(p.speed(at: 0.005), p.speed(at: 0.05),
+                          "must ease in from rest, not jump to full speed")
+        XCTAssertTrue(p.inDragPhase(at: p.duration - 0.01), "tail must be the drag coast")
+        XCTAssertEqual(p.speed(at: p.duration - 1e-6), 30, accuracy: 5)
+        XCTAssertGreaterThan(p.duration, 0.15, "single notch should glide, not snap")
+        XCTAssertLessThan(p.duration, 0.7, "the tail must stay reasonably short")
+    }
+
+    /// A bigger backlog produces a longer, farther plan (fast scroll keeps stretching the glide).
+    func testPlanScalesWithDistance() {
+        let small = MMFHybridPlan(distance: 100, initialSpeed: 0)
+        let large = MMFHybridPlan(distance: 4000, initialSpeed: 0)
+        XCTAssertGreaterThan(large.duration, small.duration)
+    }
+
+    /// The gesture→drag transition point must split distance consistently.
+    func testPlanTransitionConsistency() {
+        let p = MMFHybridPlan(distance: 500, initialSpeed: 600)
+        XCTAssertEqual(p.distance(at: p.transitionTime), p.transitionDistance, accuracy: 0.5)
+        XCTAssertFalse(p.inDragPhase(at: p.transitionTime * 0.5))
+        XCTAssertTrue(p.inDragPhase(at: p.transitionTime + 0.01))
+    }
+
+    // MARK: - Tick analyzer
+
+    /// Slow deliberate ticks: every tick is rate-floor (minSens) and never counts swipes.
+    func testAnalyzerSlowTicks() {
+        var a = MMFTickAnalyzer()
+        var t = 10.0
+        for _ in 0..<10 {
+            let r = a.feed(now: t, direction: 1)
+            XCTAssertEqual(r.tickHz, 6.25, accuracy: 1e-9)
+            XCTAssertEqual(r.swipes, 0)
+            t += 0.3
+        }
+    }
+
+    /// A rapid burst reports a high tick rate (smoothed over the last 3 gaps).
+    func testAnalyzerFastBurst() {
+        var a = MMFTickAnalyzer()
+        var t = 10.0
+        var last = MMFTickAnalyzer.Result(tickHz: 0, swipes: 0, isSequenceStart: true)
+        for _ in 0..<5 {
+            last = a.feed(now: t, direction: 1)
+            t += 0.03
+        }
+        XCTAssertEqual(last.tickHz, 1 / 0.03, accuracy: 1.0)
+    }
+
+    /// Chained fast swipes increment the swipe counter; a long pause resets it.
+    func testAnalyzerSwipeChainingAndReset() {
+        var a = MMFTickAnalyzer()
+        var t = 10.0
+        var swipes = 0.0
+        for _ in 0..<4 { // four bursts of 7 fast ticks, 0.25 s apart (avg rate ≥ 12 ticks/s)
+            for _ in 0..<7 {
+                swipes = a.feed(now: t, direction: 1).swipes
+                t += 0.02
+            }
+            t += 0.25 - 0.02
+        }
+        XCTAssertGreaterThanOrEqual(swipes, 3, "chained bursts must count as consecutive swipes")
+
+        t += 2.0 // long pause → reset
+        XCTAssertEqual(a.feed(now: t, direction: 1).swipes, 0)
+    }
+
+    /// A direction change resets everything — the first opposite tick is a fresh sequence.
+    func testAnalyzerDirectionChangeResets() {
+        var a = MMFTickAnalyzer()
+        var t = 10.0
+        for _ in 0..<5 { _ = a.feed(now: t, direction: 1); t += 0.03 }
+        let r = a.feed(now: t + 0.03, direction: -1)
+        XCTAssertTrue(r.isSequenceStart)
+        XCTAssertEqual(r.tickHz, 6.25, accuracy: 1e-9)
+        XCTAssertEqual(r.swipes, 0)
+    }
+
+    /// The first tick after idle is a sequence start (leftover glide distance gets dropped).
+    func testAnalyzerSequenceStart() {
+        var a = MMFTickAnalyzer()
+        XCTAssertTrue(a.feed(now: 10, direction: 1).isSequenceStart)
+        XCTAssertFalse(a.feed(now: 10.03, direction: 1).isSequenceStart)
     }
 }
