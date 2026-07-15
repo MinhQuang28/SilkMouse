@@ -170,6 +170,23 @@ final class ScrollMathTests: XCTestCase {
         XCTAssertLessThan(slow, 1.0)
         XCTAssertEqual(ScrollAnimator.pixelGain(slider: 0.25, inputSpeed: 10_000), slow, accuracy: 1e-12)
     }
+
+    // MARK: - Reversal brake
+
+    /// A reversed notch against a real coast (quiet input, still moving) brakes the page.
+    func testBrakeFiresOnCoastReversal() {
+        XCTAssertTrue(ScrollAnimator.shouldBrakeOnReversal(silence: 0.3, speed: 800))
+    }
+
+    /// Active back-and-forth ticking (no quiet window) reverses immediately — never a brake.
+    func testBrakeBlockedDuringActiveTicking() {
+        XCTAssertFalse(ScrollAnimator.shouldBrakeOnReversal(silence: 0.08, speed: 800))
+    }
+
+    /// A nearly-settled crawl reverses normally — stopping a barely-moving page means nothing.
+    func testBrakeBlockedWhenNearlySettled() {
+        XCTAssertFalse(ScrollAnimator.shouldBrakeOnReversal(silence: 0.3, speed: 60))
+    }
 }
 
 /// Guards the MMF scroll model (MMFScrollMath.swift) that drives Smooth mode: acceleration curve,

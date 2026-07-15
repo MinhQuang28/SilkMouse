@@ -106,8 +106,9 @@ final class ScrollAnimator: NSObject {
     // Hard ceiling on the emitted scroll speed, both glide models. Whatever the input does — a
     // flywheel at full spin, a fast-scroll multiplied wheel burst — the view never moves faster
     // than this; the excess drains later (plan/spring keep the backlog) or is dropped at the
-    // backlog clamps. ~3 screenfuls per second: fast enough to fling, slow enough to track.
-    private static let maxOutputSpeed = 6000.0 // px/s
+    // backlog clamps. ~6 screenfuls per second: flings through long pages while staying below
+    // the rates that blank-render in heavy apps (6000 felt too slow on long documents).
+    private static let maxOutputSpeed = 12_000.0 // px/s
 
     /// Gain for hi-res pixel input. The slider's perceptual curve (0.5 → 1.0 = native, capped ×3)
     /// applies fully to slow/deliberate scrolling; above a knee, the EXCESS input speed passes at
@@ -122,6 +123,14 @@ final class ScrollAnimator: NSObject {
         return (full * pixelGainKnee + (inputSpeed - pixelGainKnee)) / inputSpeed
     }
     private static let pixelGainKnee = 800.0 // px/s of input speed that still gets the full gain
+
+    /// Pure brake predicate (extracted so it's unit-testable): a reversed notch is consumed as a
+    /// brake only when the input has been quiet past the tick window (it's a coast, not active
+    /// back-and-forth scrolling) AND the glide is still moving fast enough that stopping it is
+    /// what the user means (a nearly-settled crawl reverses normally instead).
+    static func shouldBrakeOnReversal(silence: Double, speed: Double) -> Bool {
+        return silence >= MMFScrollTuning.tickIntervalMax && speed > 150
+    }
 
     /// Caller must hold `lock`.
     private func clearPlanLocked() {
@@ -162,6 +171,21 @@ final class ScrollAnimator: NSObject {
 
         lock.lock()
         phaselessStream = false
+        // MMF-style brake: an opposite notch while the glide is COASTING (input quiet past the
+        // tick window, still visibly moving) stops the page dead instead of scrolling back — the
+        // notch is consumed as a brake. Further opposite notches then scroll normally (the plan is
+        // gone and the analyzer resets on the direction change). Reversals during active ticking
+        // (gaps < the tick window) are not brakes — they flip direction immediately as before.
+        if let p = plan, planAxisIsV == axisIsV, planSign != sign {
+            let planTime = min((now - planStart) * planRate, p.duration)
+            if ScrollAnimator.shouldBrakeOnReversal(silence: now - planStart,
+                                                    speed: p.speed(at: planTime) * planRate) {
+                clearPlanLocked()
+                lastMotionTime = now // hold the stream open; the finish path closes it cleanly
+                lock.unlock()
+                return
+            }
+        }
         // The plan drives Smooth motion; any spring leftovers (mode switch mid-glide) would double-post.
         remV = 0; remH = 0; velV = 0; velH = 0
         // A tick mid-coast "catches" the glide, like touching a coasting trackpad: close the momentum
