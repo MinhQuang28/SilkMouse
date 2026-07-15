@@ -189,9 +189,9 @@ final class ScrollMathTests: XCTestCase {
     }
 }
 
-/// Guards the  scroll model (ScrollMath.swift) that drives Smooth mode: acceleration curve,
+/// Guards the scroll model (ScrollMath.swift) that drives Smooth mode: acceleration curve,
 /// fast-scroll speedup, drag physics, hybrid plan, and tick/swipe analysis.
-final class ScrollMathTests: XCTestCase {
+final class ScrollModelTests: XCTestCase {
 
     // MARK: - Acceleration curve (tick rate → px per notch)
 

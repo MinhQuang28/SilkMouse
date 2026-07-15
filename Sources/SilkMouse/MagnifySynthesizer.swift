@@ -13,6 +13,11 @@ import CoreGraphics
 /// State is guarded by `lock`; CGEventPost is thread-safe.
 final class MagnifySynthesizer {
 
+    /// Field-based gesture synthesis works through macOS 26; macOS 27 stops reading these fields
+    /// (same WindowServer change that breaks DockSwipeSynthesizer). There, fall back to Cmd+= /
+    /// Cmd+− keystrokes — zooms browsers/editors, though not pinch-only surfaces like Maps.
+    static let pinchSupported = ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27
+
     private let lock = NSLock()
     private var active = false
     private var generation = 0          // invalidates stale end-timeouts
@@ -25,9 +30,15 @@ final class MagnifySynthesizer {
     /// Feed one wheel tick's worth of zoom. `magnification` is the signed pinch delta
     /// (positive = zoom in); `chromiumBoost` should be true when the app under the cursor is a
     /// Chromium browser — they swallow small pinch deltas, so the gesture opens with a big first
-    /// step to feel responsive ('s long-standing workaround).
+    /// step to feel responsive (a long-standing upstream workaround).
     func feed(magnification: Double, chromiumBoost: Bool) {
         guard magnification != 0 else { return }
+
+        guard MagnifySynthesizer.pinchSupported else {
+            // macOS 27+: one keystroke zoom step per notch (Cmd+= in, Cmd+− out).
+            MagnifySynthesizer.postZoomKeystroke(zoomIn: magnification > 0)
+            return
+        }
 
         lock.lock()
         let opening = !active
@@ -69,6 +80,18 @@ final class MagnifySynthesizer {
         generation += 1
         lock.unlock()
         if wasActive { post(phase: phaseEnded, magnification: 0) }
+    }
+
+    /// Keystroke fallback for OSes that ignore synthetic gesture events: Cmd+'=' / Cmd+'-'
+    /// (ANSI key codes 0x18 / 0x1B), the universal app zoom shortcut.
+    private static func postZoomKeystroke(zoomIn: Bool) {
+        let keyCode: CGKeyCode = zoomIn ? 0x18 : 0x1B
+        for down in [true, false] {
+            guard let e = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
+            else { continue }
+            e.flags = .maskCommand
+            e.post(tap: .cghidEventTap)
+        }
     }
 
     private func post(phase: Int64, magnification: Double) {

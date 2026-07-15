@@ -79,7 +79,7 @@ final class DockSwipeSynthesizer {
 
         if phase == .ended || phase == .cancelled {
             // WindowServer under load drops end events, leaving the transition stuck mid-slide;
-            // re-sending them at +0.2 s and +0.5 s unsticks it ('s long-standing workaround).
+            // re-sending them at +0.2 s and +0.5 s unsticks it (a long-standing upstream workaround).
             DispatchQueue.main.async { self.scheduleEndResends(e30, e29) }
         }
     }

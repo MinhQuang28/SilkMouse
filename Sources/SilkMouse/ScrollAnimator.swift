@@ -10,8 +10,8 @@ import QuartzCore
 /// unfinished distance, covered by a short bezier whose initial slope equals the current glide
 /// speed (speed smoothing — no velocity jump on retarget) that hands off to a physical drag coast
 /// v' = −a·v^b down to a stop speed. Chained fast swipes multiply the distance exponentially
-/// ( "fast scroll"). The drag portion is labeled with momentum phases (like 's trackpad
-/// simulation) once the wheel has been quiet past the tick window, so phase-aware apps (Safari…)
+/// ("fast scroll"). The drag portion is labeled with momentum phases (trackpad-style)
+/// once the wheel has been quiet past the tick window, so phase-aware apps (Safari…)
 /// treat the coast natively; while ticks keep arriving everything stays one gesture stream.
 ///
 /// Smooth-step mode and hi-res pixel mice instead use a critically-damped spring toward an
@@ -36,6 +36,8 @@ final class ScrollAnimator: NSObject {
     private var velH = 0.0
     private var carryV = 0.0   // sub-pixel carry for the integer pixel field
     private var carryH = 0.0
+    private var lineCarryV = 0.0 // sub-line carry for the legacy line-delta field (link thread only)
+    private var lineCarryH = 0.0
     private var running = false
     private var lastTime = 0.0
     private var lastMotionTime = 0.0   // last frame/tick that actually moved — drives the gesture hold
@@ -80,9 +82,9 @@ final class ScrollAnimator: NSObject {
     private let stopDistance = 0.1    // px; together with `stopSpeed`, flushes the final sliver
     private let stopSpeed = 20.0      // px/s; below BOTH thresholds the glide settles
 
-    //  glide (Smooth wheel mode) — see ScrollMath.swift. One 1-D plan at a time (a wheel
+    // Hybrid glide (Smooth wheel mode) — see ScrollMath.swift. One 1-D plan at a time (a wheel
     // ticks one axis per event; an axis or direction change starts a fresh plan from rest).
-    private var Analyzer = TickAnalyzer()
+    private var tickAnalyzer = TickAnalyzer()
     private var plan: HybridPlan?
     private var planStart = 0.0      // when the CURRENT plan started (reset on every notch)
     private var planRate = 1.0       // >1 compresses a fast-scroll plan into `maxDuration` wall time
@@ -90,12 +92,22 @@ final class ScrollAnimator: NSObject {
     private var planEmitted = 0.0    // px of the plan already posted (absolute)
     private var planAxisIsV = true
     private var planSign = 1.0
-    private let planMaxDistance = 100_000.0 // px cap (fast scroll is exponential;  caps similarly)
+    private let planMaxDistance = 100_000.0 // px cap (fast scroll is exponential)
 
     // Hi-res pixel path (addPixels) — free-spin safety.
     private var pxInputSpeed = 0.0     // smoothed incoming px/s of the raw device stream
     private var pxLastInputTime = 0.0
-    private static let pixelMaxRemaining = 2000.0 // px backlog cap (wheel spring keeps 6000)
+    // Backlog cap large enough to hold a full flywheel spin: with the output ceiling as the
+    // throughput limit, input above the ceiling QUEUES here (and keeps draining at ceiling speed)
+    // instead of being dropped — dropping it made fast spins stop abruptly mid-page. Stopping the
+    // wheel by hand is handled separately (grab detection below), not by truncating distance.
+    private static let pixelMaxRemaining = 30_000.0
+    // Grab detection (hi-res path): the input stream ceasing while a big backlog remains means the
+    // user physically caught the wheel — collapse the backlog to a short tail so the view stops
+    // with their hand. A naturally decaying flywheel never trips this: its input slows gradually,
+    // so the backlog has already drained below the tail by the time events stop.
+    private static let pixelInputGrace = 0.10 // s without pixel input before a grab is assumed
+    private static let pixelStopTail = 300.0  // px of backlog allowed to finish after a grab
     // Hi-res glides emit PHASE-LESS continuous events (gesture/momentum fields zero), matching what
     // the mouse itself sends. Phase-tagged streams let apps rubber-band PAST the page edge — a fast
     // free-spin overscrolls into blank space and snaps back ("content vanishes, then reappears").
@@ -194,7 +206,7 @@ final class ScrollAnimator: NSObject {
         if mode == .momentum { momentumInterrupted = true; mode = .gesture; phaseStarted = false }
 
         // Tick rate → px for this notch; chained fast swipes multiply it ( fast scroll).
-        let analysis = Analyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2),
+        let analysis = tickAnalyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2),
                                         swipeMaxInterval: profile.swipeMaxInterval,
                                         swipeMinTickSpeed: profile.swipeMinTickSpeed)
         var px = ScrollTuning.pxPerTick(tickHz: analysis.tickHz, minSens: minSens, maxSens: maxSens)
@@ -318,7 +330,7 @@ final class ScrollAnimator: NSObject {
         remV = 0; remH = 0; carryV = 0; carryH = 0; velV = 0; velH = 0
         phaselessStream = false
         clearPlanLocked()
-        Analyzer.reset()
+        tickAnalyzer.reset()
         lock.unlock()
 
         guard openStream != .idle, let rl else { return } // nothing open → nothing to close
@@ -457,7 +469,7 @@ final class ScrollAnimator: NSObject {
         remV = 0; remH = 0; carryV = 0; carryH = 0; velV = 0; velH = 0
         phaselessStream = false
         clearPlanLocked()
-        Analyzer.reset()
+        tickAnalyzer.reset()
         mode = .idle
         phaseStarted = false
         momentumInterrupted = false
@@ -582,6 +594,15 @@ final class ScrollAnimator: NSObject {
             // draining a capped backlog); the finish path closes the stream.
             if planTime >= p.duration, p.total - planEmitted < 0.5 { clearPlanLocked() }
         } else {
+            // Hi-res free-spin: user grabbed the wheel (input stopped at speed) → stop with them.
+            if phaselessStream, now - pxLastInputTime > ScrollAnimator.pixelInputGrace {
+                if abs(remV) > ScrollAnimator.pixelStopTail {
+                    remV = remV > 0 ? ScrollAnimator.pixelStopTail : -ScrollAnimator.pixelStopTail
+                }
+                if abs(remH) > ScrollAnimator.pixelStopTail {
+                    remH = remH > 0 ? ScrollAnimator.pixelStopTail : -ScrollAnimator.pixelStopTail
+                }
+            }
             let (sV, newRemV, newVelV) = ScrollAnimator.springAdvance(
                 remaining: remV, velocity: velV, dt: dt, omega: omega,
                 stopDistance: stopDistance, stopSpeed: stopSpeed)
@@ -686,6 +707,17 @@ final class ScrollAnimator: NSObject {
         // so slow scrolls glide instead of stepping between whole pixels.
         event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV)
         event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: preciseH)
+        // Set the legacy LINE delta explicitly from an accumulator (1 line ≈ 10 px, like a real
+        // trackpad): most frames carry 0 lines, roughly one ±1 per 10 px of glide. Left to the
+        // constructor, every frame can end up as a whole wheel line — terminals in mouse-reporting
+        // mode (vim/tmux/TUIs) then receive 60–120 wheel reports per second, flooding the program
+        // until raw `ESC[<65;…M` sequences spill onto the screen as garbage text.
+        lineCarryV += preciseV / 10
+        lineCarryH += preciseH / 10
+        let lv = lineCarryV.rounded(.towardZero); lineCarryV -= lv
+        let lh = lineCarryH.rounded(.towardZero); lineCarryH -= lh
+        event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lv))
+        event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lh))
         // Stamp the phases so phase-aware apps (Safari) render a coherent gesture + coast, not jumps.
         // At most one of the two is nonzero at a time — a real trackpad stream looks the same.
         event.setIntegerValueField(scrollPhaseField, value: gesturePhase)

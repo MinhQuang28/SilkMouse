@@ -483,6 +483,9 @@ extension EventTapEngine {
         out.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
         out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fH)
         out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fV)
+        // Explicit line deltas (1 line ≈ 10 px) so terminals don't see a wheel line per event.
+        out.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64((fH / 10).rounded(.towardZero)))
+        out.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64((fV / 10).rounded(.towardZero)))
         out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
         out.flags = [] // modifiers already applied upstream (Shift = the swap itself)
         out.post(tap: .cghidEventTap)
