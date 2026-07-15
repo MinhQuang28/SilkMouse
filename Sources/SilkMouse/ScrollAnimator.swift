@@ -142,8 +142,10 @@ final class ScrollAnimator: NSObject {
 
     /// Feed a wheel notch (line deltas, already direction-corrected). In Smooth-step mode each notch
     /// is a fixed `lines`-line spring step with a crisp ease and no coast; in Smooth mode the notch
-    /// re-plans an MMF hybrid glide (`speed` = sensitivity slider, `accelerate` = fast scroll).
-    func addTick(lineV: Double, lineH: Double, speed: Double, stepped: Bool, lines: Int, accelerate: Bool) {
+    /// re-plans an MMF hybrid glide. The caller resolves `profile` (smoothness setting or a held
+    /// modifier) and `minSens`/`maxSens` (speed slider + screen scaling); `accelerate` = fast scroll.
+    func addTick(lineV: Double, lineH: Double, stepped: Bool, lines: Int,
+                 profile: MMFScrollProfile, minSens: Double, maxSens: Double, accelerate: Bool) {
         let now = CACurrentMediaTime()
 
         if stepped {
@@ -167,7 +169,6 @@ final class ScrollAnimator: NSObject {
 
         let axisIsV = lineV != 0
         let sign: Double = axisIsV ? (lineV > 0 ? 1 : -1) : (lineH > 0 ? 1 : -1)
-        let sens = MMFScrollTuning.sensitivity(slider: speed)
 
         lock.lock()
         phaselessStream = false
@@ -194,9 +195,8 @@ final class ScrollAnimator: NSObject {
 
         // Tick rate → px for this notch; chained fast swipes multiply it (MMF fast scroll).
         let analysis = mmfAnalyzer.feed(now: now, direction: Int(sign) * (axisIsV ? 1 : 2))
-        var px = MMFScrollTuning.pxPerTick(tickHz: analysis.tickHz,
-                                           minSens: sens.minSens, maxSens: sens.maxSens)
-        if accelerate { px *= MMFSpeedupCurve.regular.factor(swipes: analysis.swipes) }
+        var px = MMFScrollTuning.pxPerTick(tickHz: analysis.tickHz, minSens: minSens, maxSens: maxSens)
+        if accelerate, let speedup = profile.speedup { px *= speedup.factor(swipes: analysis.swipes) }
 
         // Re-plan: unfinished distance rolls into the new glide (dropped at a sequence start, like
         // MMF) and the new plan takes off at the current glide speed — that continuity is the
@@ -208,7 +208,8 @@ final class ScrollAnimator: NSObject {
             if !analysis.isSequenceStart { leftover = max(p.total - planEmitted, 0) }
             v0 = p.speed(at: planTime) * planRate
         }
-        let p = MMFHybridPlan(distance: min(leftover + px, planMaxDistance), initialSpeed: v0)
+        let p = MMFHybridPlan(distance: min(leftover + px, planMaxDistance), initialSpeed: v0,
+                              profile: profile)
         plan = p
         planStart = now
         planPrevTime = 0
@@ -674,6 +675,11 @@ final class ScrollAnimator: NSObject {
                                   wheelCount: 2, wheel1: intV, wheel2: intH, wheel3: 0) else { return }
         // Mark continuous so apps treat it as trackpad-style smooth scrolling, not a wheel notch.
         event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        // Strip keyboard modifiers: freshly created events snapshot the live modifier state, and
+        // our modifiers all MEAN something upstream (Shift = axis swap, Option = precise, Ctrl =
+        // quick — already applied before the glide). Passing them through would double-apply the
+        // effect in apps with their own modifier handling (Chromium transposes Shift+wheel itself).
+        event.flags = []
         // Carry the exact sub-pixel delta for apps that read the fixed-point field (most modern ones),
         // so slow scrolls glide instead of stepping between whole pixels.
         event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV)

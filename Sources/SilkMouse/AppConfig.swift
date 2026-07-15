@@ -28,6 +28,7 @@ struct AppConfig: Codable, Sendable {
     var enabled: Bool = true
     var reverseScroll: Bool = false
     var scrollMode: ScrollMode = .smooth
+    var scrollSmoothness: ScrollSmoothness = .balanced // Smooth mode curve profile (MMF-derived)
     var scrollSpeed: Double = 0.5       // 0.05 (slowest) … 1.5 (fast); Smooth mode: MMF sensitivity
                                         // anchors (0=low, 0.5=medium, 1=high); also scales hi-res gain
     var scrollLines: Int = 3            // lines per notch in Smooth-step mode (Windows default = 3)
@@ -59,7 +60,7 @@ struct AppConfig: Codable, Sendable {
 /// (which would wipe the user's saved config). Encoding stays synthesized.
 extension AppConfig {
     enum CodingKeys: String, CodingKey {
-        case enabled, reverseScroll, scrollMode, smoothScroll, scrollSpeed, scrollLines
+        case enabled, reverseScroll, scrollMode, scrollSmoothness, smoothScroll, scrollSpeed, scrollLines
         case scrollAcceleration, smoothHighRes
         case spaceDragButton, spaceDragThreshold, spaceDragReverse, spaceDragFollowFinger
         case excludedBundleIDs, verticalToHorizontalBundleIDs, mappings
@@ -76,6 +77,7 @@ extension AppConfig {
         } else if let legacy = try c.decodeIfPresent(Bool.self, forKey: .smoothScroll) {
             scrollMode = legacy ? .smooth : .standard
         }
+        scrollSmoothness   = try c.decodeIfPresent(ScrollSmoothness.self, forKey: .scrollSmoothness)  ?? scrollSmoothness
         scrollSpeed        = try c.decodeIfPresent(Double.self,          forKey: .scrollSpeed)        ?? scrollSpeed
         scrollLines        = try c.decodeIfPresent(Int.self,             forKey: .scrollLines)        ?? scrollLines
         scrollAcceleration = try c.decodeIfPresent(Bool.self,            forKey: .scrollAcceleration) ?? scrollAcceleration
@@ -95,6 +97,7 @@ extension AppConfig {
         try c.encode(enabled, forKey: .enabled)
         try c.encode(reverseScroll, forKey: .reverseScroll)
         try c.encode(scrollMode, forKey: .scrollMode)
+        try c.encode(scrollSmoothness, forKey: .scrollSmoothness)
         try c.encode(scrollSpeed, forKey: .scrollSpeed)
         try c.encode(scrollLines, forKey: .scrollLines)
         try c.encode(scrollAcceleration, forKey: .scrollAcceleration)

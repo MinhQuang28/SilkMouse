@@ -207,11 +207,45 @@ final class MMFScrollMathTests: XCTestCase {
 
     /// Speed slider maps to MMF's low/medium/high sensitivity anchors and extends beyond 1.0.
     func testSensitivityMapping() {
-        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 0).minSens, 30)
-        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 0.5).minSens, 60)
-        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 0.5).maxSens, 120)
-        XCTAssertEqual(MMFScrollTuning.sensitivity(slider: 1).maxSens, 180)
-        XCTAssertGreaterThan(MMFScrollTuning.sensitivity(slider: 1.5).maxSens, 180)
+        let p = MMFScrollProfile.balanced
+        XCTAssertEqual(p.sensitivity(slider: 0).minSens, 30)
+        XCTAssertEqual(p.sensitivity(slider: 0.5).minSens, 60)
+        XCTAssertEqual(p.sensitivity(slider: 0.5).maxSens, 120)
+        XCTAssertEqual(p.sensitivity(slider: 1).maxSens, 180)
+        XCTAssertGreaterThan(p.sensitivity(slider: 1.5).maxSens, 180)
+    }
+
+    /// Screen-size scaling: maxSens gets a 10%-weighted boost by screen span vs the 1080p
+    /// baseline; minSens is untouched (slow single ticks stay gentle on any display).
+    func testSensitivityScreenScaling() {
+        let p = MMFScrollProfile.balanced
+        let base = p.sensitivity(slider: 0.5, screenSizeFactor: 1.0)
+        let big = p.sensitivity(slider: 0.5, screenSizeFactor: 2.0) // 2160p display
+        XCTAssertEqual(big.minSens, base.minSens)
+        XCTAssertEqual(big.maxSens, base.maxSens * 1.1, accuracy: 1e-9)
+    }
+
+    /// The three smoothness profiles order correctly: floaty coasts longer than balanced,
+    /// which coasts longer than snappy, for the same flick.
+    func testSmoothnessProfilesOrdered() {
+        let dist = 400.0, v0 = 1500.0
+        let snappy = MMFHybridPlan(distance: dist, initialSpeed: v0, profile: .snappy)
+        let balanced = MMFHybridPlan(distance: dist, initialSpeed: v0, profile: .balanced)
+        let floaty = MMFHybridPlan(distance: dist, initialSpeed: v0, profile: .floaty)
+        XCTAssertLessThan(snappy.duration, balanced.duration)
+        XCTAssertLessThan(balanced.duration, floaty.duration)
+    }
+
+    /// Modifier profiles: precise moves a few px per notch regardless of the slider; quick moves
+    /// about half a window per notch, scaled to the screen.
+    func testModifierProfiles() {
+        let precise = MMFScrollProfile.precise.sensitivity(slider: 1.5)
+        XCTAssertEqual(precise.minSens, 2)
+        XCTAssertLessThanOrEqual(precise.maxSens, 20)
+        let quick = MMFScrollProfile.quick(screenSpan: 1080).sensitivity(slider: 0.5)
+        XCTAssertEqual(quick.minSens, 1080 * 0.85 * 0.5, accuracy: 1e-9)
+        XCTAssertEqual(quick.maxSens, 1080 * 0.85 * 1.5, accuracy: 1e-9)
+        XCTAssertNil(MMFScrollProfile.precise.speedup, "precise never fast-scrolls")
     }
 
     // MARK: - Fast-scroll speedup
@@ -297,7 +331,7 @@ final class MMFScrollMathTests: XCTestCase {
     /// the plan takes off at (about) the incoming glide speed.
     func testPlanStartsAtIncomingSpeed() {
         let v0 = 900.0
-        let p = MMFHybridPlan(distance: 400, initialSpeed: v0, smoothing: 0.15)
+        let p = MMFHybridPlan(distance: 400, initialSpeed: v0, profile: .balanced)
         XCTAssertEqual(p.speed(at: 0), v0, accuracy: v0 * 0.02,
                        "initial speed must match the incoming glide speed")
     }

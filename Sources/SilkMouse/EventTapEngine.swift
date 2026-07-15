@@ -20,6 +20,7 @@ final class EventTapEngine {
     private var enabled = true
     private var reverseScroll = false
     private var scrollMode: ScrollMode = .smooth
+    private var scrollSmoothness: ScrollSmoothness = .balanced
     private var scrollSpeed = 0.5
     private var scrollLines = 3
     private var scrollAcceleration = true
@@ -39,6 +40,7 @@ final class EventTapEngine {
 
     /// Smooth scrolling + drag-to-switch-Spaces; only ever touched on the tap thread.
     private let scrollAnimator = ScrollAnimator()
+    private let magnifier = MagnifySynthesizer()
     private let spaceDrag = SpaceDragGesture()
     private let cursorApp = CursorAppResolver() // tap-thread only, like the animator
 
@@ -79,6 +81,7 @@ final class EventTapEngine {
     /// boundary (harmless no-op when no gesture is active).
     @objc func handleContextChange() {
         scrollAnimator.endGestureNow()
+        magnifier.endNow()
     }
 
     /// A mouse (dis)connected — e.g. changing the report rate re-enumerates it on USB, which orphans
@@ -129,6 +132,7 @@ final class EventTapEngine {
     @objc func handleWake() {
         reEnableTap()
         scrollAnimator.handleWake()
+        magnifier.endNow()
         requestDragCancel()
     }
 
@@ -161,6 +165,7 @@ final class EventTapEngine {
         enabled = config.enabled
         reverseScroll = config.reverseScroll
         scrollMode = config.scrollMode
+        scrollSmoothness = config.scrollSmoothness
         scrollSpeed = config.scrollSpeed
         scrollLines = config.scrollLines
         scrollAcceleration = config.scrollAcceleration
@@ -227,6 +232,7 @@ final class EventTapEngine {
         let maps = mappingsByButton
         let reverse = reverseScroll
         let mode = scrollMode
+        let smoothness = scrollSmoothness
         let speed = scrollSpeed
         let lines = scrollLines
         let accelerate = scrollAcceleration
@@ -295,9 +301,17 @@ final class EventTapEngine {
 
             let isContinuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
 
+            // Keyboard-modifier scrolling (MMF-style): Cmd = pinch zoom, Ctrl = quick (half a
+            // window per notch), Option = precise (a few px per notch), Shift = horizontal.
+            let flags = event.flags
+            let modZoom = flags.contains(.maskCommand)
+            let modQuick = flags.contains(.maskControl)
+            let modPrecise = flags.contains(.maskAlternate)
+            let modShift = flags.contains(.maskShift)
+
             // Resolve the app under the cursor once (scroll targets the window under the pointer,
-            // not the focused app) for both per-app lists.
-            let cursorID = (!excluded.isEmpty || !vToH.isEmpty)
+            // not the focused app) — for the per-app lists and the Chromium zoom workaround.
+            let cursorID = (!excluded.isEmpty || !vToH.isEmpty || modZoom)
                 ? cursorApp.bundleID(at: event.location) : nil
             // Excluded app: bypass the animator so the wheel event stays a genuine legacy notch.
             // That keeps AppKit's vertical→horizontal transposition alive in horizontal-only views,
@@ -307,7 +321,31 @@ final class EventTapEngine {
             // Axis-swap app (e.g. Nimble Commander's Brief panels): the wheel's vertical motion
             // should scroll HORIZONTALLY. We transpose the axes ourselves, so smoothing keeps
             // working — no need to rely on AppKit's transposition (which rejects phased gestures).
-            let transpose = cursorID.map(vToH.contains) == true
+            // Shift toggles the swap (XOR): held over a normal app it scrolls horizontally, held
+            // over an axis-swap app it restores vertical.
+            let transpose = (cursorID.map(vToH.contains) == true) != modShift
+
+            // Cmd+scroll → real pinch zoom (works wherever a trackpad pinch works). Consumes the
+            // wheel event entirely; the pinch ends itself after a short quiet period.
+            if modZoom {
+                let dir = reverse ? -1.0 : 1.0
+                let mag: Double
+                if isContinuous {
+                    mag = (event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
+                         + event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2)) * dir / 800.0
+                } else {
+                    // One notch = one comfortable zoom step (MMF's medium tick ÷ its 800 scale).
+                    let notches = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
+                                + event.getIntegerValueField(.scrollWheelEventDeltaAxis2)
+                    mag = Double(notches.signum()) * dir * 60.0 / 800.0
+                }
+                let chromium = ["com.google.Chrome", "org.chromium.Chromium",
+                                "com.operasoftware.Opera", "com.microsoft.edgemac",
+                                "com.vivaldi.Vivaldi", "com.brave.Browser"]
+                    .contains { cursorID?.contains($0) == true }
+                magnifier.feed(magnification: mag, chromiumBoost: chromium)
+                return nil
+            }
 
             // High-resolution / free-spin mice (e.g. MX Master 3) report continuous pixel deltas and,
             // on free-spin, the hardware flywheel coasts on its own. The OS already renders these
@@ -346,12 +384,32 @@ final class EventTapEngine {
             var lineH = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)) * dir
             if transpose { swap(&lineV, &lineH) } // wheel scrolls the app horizontally
 
+            // Resolve the glide tuning: the smoothness setting, overridden by a held modifier.
+            // Quick/precise are DEFINED by their animation, so they force the glide even in
+            // Standard and Smooth-step modes (MMF does the same). maxSens is scaled ~10% by the
+            // display under the cursor so big screens fling proportionally farther.
+            var profile = MMFScrollProfile.forSmoothness(smoothness)
+            var forceGlide = false
+            if modQuick {
+                profile = .quick(screenSpan: screenSpan(at: event.location, vertical: lineV != 0))
+                forceGlide = true
+            } else if modPrecise {
+                profile = .precise
+                forceGlide = true
+            }
+            let baseline = lineV != 0 ? 1080.0 : 1920.0
+            let sizeFactor = modQuick ? 1.0
+                : screenSpan(at: event.location, vertical: lineV != 0) / baseline
+            let sens = profile.sensitivity(slider: speed, screenSizeFactor: sizeFactor)
+
             // Notched mouse: Smooth and Smooth-step both drive the animator (momentum vs crisp N-line
             // step); Standard falls through to raw passthrough below.
-            let animated = (mode == .smooth || mode == .smoothStep) && !excludeSmoothing
+            let animated = ((mode == .smooth || mode == .smoothStep) || forceGlide) && !excludeSmoothing
             if animated, lineV != 0 || lineH != 0 {
-                scrollAnimator.addTick(lineV: lineV, lineH: lineH, speed: speed,
-                                       stepped: mode == .smoothStep, lines: lines, accelerate: accelerate)
+                scrollAnimator.addTick(lineV: lineV, lineH: lineH,
+                                       stepped: mode == .smoothStep && !forceGlide, lines: lines,
+                                       profile: profile, minSens: sens.minSens, maxSens: sens.maxSens,
+                                       accelerate: accelerate)
                 return nil // swallow; the animator drives the pixel scroll
             }
             if reverse || transpose {
@@ -375,6 +433,7 @@ final class EventTapEngine {
                 out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(sign) * (transpose ? f2 : f1))
                 out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: Double(sign) * (transpose ? f1 : f2))
                 out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
+                out.flags = [] // modifiers already applied upstream (Shift = the swap itself)
                 out.post(tap: .cghidEventTap)
                 return nil
             }
@@ -395,6 +454,17 @@ extension EventTapEngine {
     /// Scale a continuous (high-res) mouse's deltas by the Scroll-speed slider and flip them for
     /// reverse, in place. Neutral speed (0.5, the slider default) maps to gain 1.0 so the mouse keeps
     /// its native feel until the user actually moves the slider.
+    /// Pixel span of the display under `point` — feeds screen-size sensitivity scaling and the
+    /// quick-scroll window size. Falls back to the 1080p baseline when the lookup misses.
+    fileprivate func screenSpan(at point: CGPoint, vertical: Bool) -> Double {
+        var display: CGDirectDisplayID = 0
+        var count: UInt32 = 0
+        guard CGGetDisplaysWithPoint(point, 1, &display, &count) == .success, count > 0 else {
+            return vertical ? 1080 : 1920
+        }
+        return Double(vertical ? CGDisplayPixelsHigh(display) : CGDisplayPixelsWide(display))
+    }
+
     /// Post a fresh continuous (pixel) event with the axes SWAPPED — for axis-swap apps when the
     /// hi-res stream is not animated. Same fresh-event dance as Standard-mode reverse: in-place
     /// edits on a passthrough don't stick. Slider gain and reverse fold into the same event.
@@ -411,6 +481,7 @@ extension EventTapEngine {
         out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fH)
         out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fV)
         out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
+        out.flags = [] // modifiers already applied upstream (Shift = the swap itself)
         out.post(tap: .cghidEventTap)
     }
 

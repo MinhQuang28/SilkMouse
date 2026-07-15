@@ -18,16 +18,6 @@ import Foundation
 ///      `stopSpeed`. The drag tail is what gives MMF its signature inertial coast.
 enum MMFScrollTuning {
 
-    /// Softened LowInertia ("Regular") curve — the alternative Regular tuning noted in MMF's
-    /// ScrollConfig ("still super responsive and much smoother feeling"): speed smoothing back on
-    /// for velocity continuity between notches, slightly longer base, gentler drag.
-    /// Shipped MMF Regular: base 0.140, smoothing 0.0, drag a=15 b=1.05 — snappier, more direct.
-    /// MMF High: base 0.220, smoothing 0.15, drag a=40 b=0.7 — long trackpad-like coast.
-    static let baseMsPerStep = 0.175      // s — base (gesture) portion target duration
-    static let speedSmoothing = 0.15      // consecutive notches keep continuous velocity
-    static let dragCoefficient = 25.0     // a in v' = −a·v^b
-    static let dragExponent = 0.9         // b — moderately short inertia tail
-    static let stopSpeed = 30.0           // px/s — drag tail ends here
     static let maxDuration = 1.5          // s — fast-scroll animations are compressed to this
 
     /// Tick-rate window (MMF ScrollAnalyzer): gaps outside [15 ms, 160 ms] are clamped; a gap
@@ -43,18 +33,96 @@ enum MMFScrollTuning {
         let slope = (maxSens - minSens) / (xMax - xMin)
         return max(minSens, minSens + slope * (tickHz - xMin))
     }
+}
 
-    /// Speed-slider → (minSens, maxSens) px/tick. MMF "Regular" smoothness anchors: slider
-    /// low/medium/high = 0/0.5/1 → minSens 30/60/120, maxSens 90/120/180. ("High" smoothness
-    /// anchors would be 60/90/150 and 120/180/240.) SilkMouse's slider runs 0.05…1.5, so values
-    /// beyond 1 extend the second segment linearly.
-    static func sensitivity(slider: Double) -> (minSens: Double, maxSens: Double) {
-        func piecewise(_ lo: Double, _ mid: Double, _ hi: Double) -> Double {
-            if slider <= 0 { return lo }
-            if slider <= 0.5 { return lo + (mid - lo) * (slider / 0.5) }
-            return mid + (hi - mid) * ((slider - 0.5) / 0.5) // continues linearly past 1.0
+/// The user-facing smoothness setting — three MMF-derived curve profiles.
+enum ScrollSmoothness: String, Codable, Sendable, CaseIterable {
+    case snappy   // MMF "Regular" as shipped — direct, minimal tail
+    case balanced // MMF's softened-Regular alternative — smooth but responsive (default)
+    case floaty   // MMF "High" — long trackpad-like coast
+
+    var label: String {
+        switch self {
+        case .snappy:   return "Snappy (direct)"
+        case .balanced: return "Balanced"
+        case .floaty:   return "Floaty (trackpad)"
         }
-        return (piecewise(30, 60, 120), piecewise(90, 120, 180))
+    }
+}
+
+/// One complete curve + sensitivity tuning. The engine resolves a profile per tick from the
+/// smoothness setting and any held modifier (Option → precise, Ctrl → quick).
+struct MMFScrollProfile {
+    let baseMsPerStep: Double     // s — base (gesture) portion target duration
+    let speedSmoothing: Double    // bezier reach along the current-speed direction (0 = linear)
+    let dragCoefficient: Double   // a in v' = −a·v^b
+    let dragExponent: Double      // b
+    let stopSpeed: Double         // px/s — drag tail ends here
+    let minSensAnchors: (lo: Double, mid: Double, hi: Double) // px/tick at slider 0 / 0.5 / 1
+    let maxSensAnchors: (lo: Double, mid: Double, hi: Double)
+    let speedup: MMFSpeedupCurve? // fast-scroll multiplier; nil → never speeds up
+
+    /// MMF "Regular" as shipped: linear base, steep drag — snappy and direct.
+    static let snappy = MMFScrollProfile(
+        baseMsPerStep: 0.140, speedSmoothing: 0.0, dragCoefficient: 15, dragExponent: 1.05,
+        stopSpeed: 30, minSensAnchors: (30, 60, 120), maxSensAnchors: (90, 120, 180),
+        speedup: .regular)
+
+    /// The alternative Regular tuning noted in MMF's ScrollConfig ("still super responsive and
+    /// much smoother feeling"): speed smoothing for velocity continuity, gentler drag.
+    static let balanced = MMFScrollProfile(
+        baseMsPerStep: 0.175, speedSmoothing: 0.15, dragCoefficient: 25, dragExponent: 0.9,
+        stopSpeed: 30, minSensAnchors: (30, 60, 120), maxSensAnchors: (90, 120, 180),
+        speedup: .regular)
+
+    /// MMF "High": long, floaty trackpad-like coast; fast scroll kicks in a swipe earlier.
+    static let floaty = MMFScrollProfile(
+        baseMsPerStep: 0.220, speedSmoothing: 0.15, dragCoefficient: 40, dragExponent: 0.7,
+        stopSpeed: 30, minSensAnchors: (60, 90, 150), maxSensAnchors: (120, 180, 240),
+        speedup: MMFSpeedupCurve(swipeThreshold: 2, initialSpeedup: 1.33, exponentialSpeedup: 7.5))
+
+    /// Option-modifier precise scrolling (MMF PreciseScroll): a few px per tick for fine control,
+    /// snappy curve, no fast scroll. Slider-independent (constant anchors).
+    static let precise = MMFScrollProfile(
+        baseMsPerStep: 0.140, speedSmoothing: 0.0, dragCoefficient: 15, dragExponent: 1.05,
+        stopSpeed: 50, minSensAnchors: (2, 2, 2), maxSensAnchors: (20, 20, 20),
+        speedup: nil)
+
+    /// Ctrl-modifier quick scrolling (MMF QuickScroll): each notch moves about half a window,
+    /// long inertial coast, aggressive speedup. Sensitivity comes from the screen span under the
+    /// cursor, not the slider (MMF scales to 85% of the screen as the "window size").
+    static func quick(screenSpan: Double) -> MMFScrollProfile {
+        let window = max(screenSpan, 400) * 0.85
+        return MMFScrollProfile(
+            baseMsPerStep: 0.300, speedSmoothing: 0.0, dragCoefficient: 30, dragExponent: 0.7,
+            stopSpeed: 1,
+            minSensAnchors: (window * 0.5, window * 0.5, window * 0.5),
+            maxSensAnchors: (window * 1.5, window * 1.5, window * 1.5),
+            speedup: MMFSpeedupCurve(swipeThreshold: 1, initialSpeedup: 2.0, exponentialSpeedup: 10))
+    }
+
+    static func forSmoothness(_ s: ScrollSmoothness) -> MMFScrollProfile {
+        switch s {
+        case .snappy:   return .snappy
+        case .balanced: return .balanced
+        case .floaty:   return .floaty
+        }
+    }
+
+    /// (minSens, maxSens) px/tick for the speed slider (anchors at 0 / 0.5 / 1, linear extension
+    /// past 1 — SilkMouse's slider runs 0.05…1.5) and the display under the cursor: maxSens gets
+    /// a 10%-weighted scale by screen span relative to a 1080p baseline (MMF's screen scaling),
+    /// so big displays fling proportionally farther.
+    func sensitivity(slider: Double, screenSizeFactor: Double = 1.0) -> (minSens: Double, maxSens: Double) {
+        func piecewise(_ a: (lo: Double, mid: Double, hi: Double)) -> Double {
+            if slider <= 0 { return a.lo }
+            if slider <= 0.5 { return a.lo + (a.mid - a.lo) * (slider / 0.5) }
+            return a.mid + (a.hi - a.mid) * ((slider - 0.5) / 0.5) // continues linearly past 1.0
+        }
+        let screenSizeWeight = 0.1
+        let maxSens = piecewise(maxSensAnchors)
+        return (piecewise(minSensAnchors),
+                maxSens * (1 - screenSizeWeight) + maxSens * screenSizeWeight * screenSizeFactor)
     }
 }
 
@@ -264,12 +332,13 @@ struct MMFHybridPlan {
     /// - Parameters:
     ///   - distance: px to cover (> 0)
     ///   - initialSpeed: current glide speed in px/s (≥ 0); the plan starts at this speed
-    init(distance: Double, initialSpeed: Double,
-         baseDuration: Double = MMFScrollTuning.baseMsPerStep,
-         smoothing: Double = MMFScrollTuning.speedSmoothing,
-         dragCoefficient: Double = MMFScrollTuning.dragCoefficient,
-         dragExponent: Double = MMFScrollTuning.dragExponent,
-         stopSpeed: Double = MMFScrollTuning.stopSpeed) {
+    ///   - profile: curve shape (base duration, speed smoothing, drag, stop speed)
+    init(distance: Double, initialSpeed: Double, profile: MMFScrollProfile = .balanced) {
+        let baseDuration = profile.baseMsPerStep
+        let smoothing = profile.speedSmoothing
+        let dragCoefficient = profile.dragCoefficient
+        let dragExponent = profile.dragExponent
+        let stopSpeed = profile.stopSpeed
 
         total = distance
         bezierDuration = baseDuration

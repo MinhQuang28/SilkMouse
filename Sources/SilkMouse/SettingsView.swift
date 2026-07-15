@@ -45,6 +45,11 @@ struct SettingsView: View {
                 ForEach(ScrollMode.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             if store.config.scrollMode == .smooth {
+                Picker("Smoothness", selection: $store.config.scrollSmoothness) {
+                    ForEach(ScrollSmoothness.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                Text("Snappy = direct with a minimal tail (Mac Mouse Fix \"Regular\"). Balanced = smooth but responsive. Floaty = long trackpad-like coast (MMF \"High\").")
+                    .font(.caption).foregroundStyle(.secondary)
                 VStack(alignment: .leading) {
                     Text("Scroll speed: \(String(format: "%.2f×", store.config.scrollSpeed))")
                     // Floor of 0.05 (not 0.2): high-res "continuous" mice natively scroll fast, and
@@ -70,6 +75,10 @@ struct SettingsView: View {
             }
             Text("Standard = instant wheel (no animation). Smooth = trackpad-style momentum. Smooth-step = Windows-browser feel: each notch eases a fixed number of lines with no coast. Applies to a physical mouse wheel only — trackpad scrolling is left untouched.")
                 .font(.caption).foregroundStyle(.secondary)
+            Section("Modifier keys while scrolling") {
+                Text("⇧ Shift — scroll horizontally (swaps the axes)\n⌥ Option — precise: a few pixels per notch for fine control\n⌃ Control — quick: about half a window per notch, long glide\n⌘ Command — zoom: a real trackpad pinch (browsers, Preview, Maps…)")
+                    .font(.caption)
+            }
             if store.config.scrollMode != .standard {
                 ExcludedAppsView()
             }
