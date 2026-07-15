@@ -36,6 +36,7 @@ final class AppConfigTests: XCTestCase {
         config.spaceDragThreshold = 250
         config.spaceDragReverse = true
         config.excludedBundleIDs = ["info.filesmanager.Files", "com.example.other"]
+        config.verticalToHorizontalBundleIDs = ["info.filesmanager.Files"]
         config.mappings = [ButtonMapping(buttonNumber: 6, action: .missionControl)]
 
         let decoded = try roundTrip(config)
@@ -50,6 +51,7 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded.spaceDragThreshold, 250, accuracy: 1e-9)
         XCTAssertEqual(decoded.spaceDragReverse, true)
         XCTAssertEqual(decoded.excludedBundleIDs, ["info.filesmanager.Files", "com.example.other"])
+        XCTAssertEqual(decoded.verticalToHorizontalBundleIDs, ["info.filesmanager.Files"])
         XCTAssertEqual(decoded.mappings, config.mappings)
     }
 
@@ -65,6 +67,7 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(decoded.scrollLines, 3)
         XCTAssertEqual(decoded.smoothHighRes, false)
         XCTAssertEqual(decoded.excludedBundleIDs, [])
+        XCTAssertEqual(decoded.verticalToHorizontalBundleIDs, [])
         XCTAssertEqual(decoded.mappings.count, AppConfig.defaultMappings.count)
     }
 

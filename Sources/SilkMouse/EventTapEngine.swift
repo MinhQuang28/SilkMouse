@@ -30,6 +30,7 @@ final class EventTapEngine {
     private var spaceDragFollowFinger = true
     private var captureMode = false
     private var excludedBundleIDs: Set<String> = []
+    private var verticalToHorizontalBundleIDs: Set<String> = []
     private var mappingsByButton: [Int: RemapAction] = [:]
     private var pendingDragCancel = false // set on wake/device-change, consumed on the tap thread
 
@@ -169,6 +170,7 @@ final class EventTapEngine {
         spaceDragReverse = config.spaceDragReverse
         spaceDragFollowFinger = config.spaceDragFollowFinger
         excludedBundleIDs = Set(config.excludedBundleIDs)
+        verticalToHorizontalBundleIDs = Set(config.verticalToHorizontalBundleIDs)
         mappingsByButton = Dictionary(config.mappings.map { ($0.buttonNumber, $0.action) },
                                       uniquingKeysWith: { first, _ in first })
         lock.unlock()
@@ -230,6 +232,7 @@ final class EventTapEngine {
         let accelerate = scrollAcceleration
         let smoothHiRes = smoothHighRes
         let excluded = excludedBundleIDs
+        let vToH = verticalToHorizontalBundleIDs
         let dragCancel = pendingDragCancel
         pendingDragCancel = false
         spaceDrag.button = spaceDragButton
@@ -292,14 +295,19 @@ final class EventTapEngine {
 
             let isContinuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
 
-            // Excluded app under the cursor (scroll targets the window under the pointer, not the
-            // focused app): bypass the animator so the wheel event stays a genuine legacy notch.
-            // That keeps AppKit's vertical→horizontal transposition alive in horizontal-only views
-            // (Nimble Commander's Brief panels…), which our synthetic trackpad-style stream — being
-            // a phase-tagged gesture — would defeat. Reverse and the continuous-mouse speed slider
-            // still apply; only the smoothing is skipped.
-            let excludeSmoothing = !excluded.isEmpty
-                && cursorApp.bundleID(at: event.location).map(excluded.contains) == true
+            // Resolve the app under the cursor once (scroll targets the window under the pointer,
+            // not the focused app) for both per-app lists.
+            let cursorID = (!excluded.isEmpty || !vToH.isEmpty)
+                ? cursorApp.bundleID(at: event.location) : nil
+            // Excluded app: bypass the animator so the wheel event stays a genuine legacy notch.
+            // That keeps AppKit's vertical→horizontal transposition alive in horizontal-only views,
+            // which our synthetic trackpad-style stream — being a phase-tagged gesture — would
+            // defeat. Reverse and the continuous-mouse speed slider still apply.
+            let excludeSmoothing = cursorID.map(excluded.contains) == true
+            // Axis-swap app (e.g. Nimble Commander's Brief panels): the wheel's vertical motion
+            // should scroll HORIZONTALLY. We transpose the axes ourselves, so smoothing keeps
+            // working — no need to rely on AppKit's transposition (which rejects phased gestures).
+            let transpose = cursorID.map(vToH.contains) == true
 
             // High-resolution / free-spin mice (e.g. MX Master 3) report continuous pixel deltas and,
             // on free-spin, the hardware flywheel coasts on its own. The OS already renders these
@@ -314,20 +322,29 @@ final class EventTapEngine {
                 let animated = (mode == .smooth || mode == .smoothStep) && !excludeSmoothing
                 if smoothHiRes, animated {
                     let dir = reverse ? -1.0 : 1.0
-                    let pxV = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * dir
-                    let pxH = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * dir
+                    var pxV = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * dir
+                    var pxH = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * dir
+                    if transpose { swap(&pxV, &pxH) }
                     if pxV != 0 || pxH != 0 {
                         scrollAnimator.addPixels(pxV: pxV, pxH: pxH, speed: speed)
                         return nil // swallow; the animator drives the pixel scroll
                     }
+                }
+                if transpose {
+                    // Un-animated continuous event with swapped axes: in-place field edits are not
+                    // honored on passthrough (macOS re-reads the original deltas), so post a fresh
+                    // tagged event and swallow the original. Slider gain + reverse fold in here.
+                    postTransposedContinuous(event, speed: speed, reverse: reverse)
+                    return nil
                 }
                 applyContinuous(event, speed: speed, reverse: reverse)
                 return Unmanaged.passUnretained(event)
             }
 
             let dir = reverse ? -1.0 : 1.0
-            let lineV = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)) * dir
-            let lineH = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)) * dir
+            var lineV = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)) * dir
+            var lineH = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)) * dir
+            if transpose { swap(&lineV, &lineH) } // wheel scrolls the app horizontally
 
             // Notched mouse: Smooth and Smooth-step both drive the animator (momentum vs crisp N-line
             // step); Standard falls through to raw passthrough below.
@@ -337,26 +354,28 @@ final class EventTapEngine {
                                        stepped: mode == .smoothStep, lines: lines, accelerate: accelerate)
                 return nil // swallow; the animator drives the pixel scroll
             }
-            if reverse {
+            if reverse || transpose {
                 // macOS does NOT honor in-place delta edits on a passed-through wheel event — the
-                // system re-reads the original kernel deltas, so negating the fields in place is
+                // system re-reads the original kernel deltas, so editing fields in place is
                 // invisible (this is why reverse worked in Smooth, which posts fresh events, but not
-                // in Standard). So build a FRESH reversed wheel event carrying the negated line, pixel
-                // and fixed-point deltas, tag it so our tap skips it, post it, and swallow the original.
-                guard let rev = CGEvent(scrollWheelEvent2Source: scrollSource, units: .line,
+                // in Standard). So build a FRESH wheel event carrying the reversed and/or
+                // axis-swapped line, pixel and fixed-point deltas, tag it so our tap skips it,
+                // post it, and swallow the original. (`lineV`/`lineH` are already adjusted above.)
+                guard let out = CGEvent(scrollWheelEvent2Source: scrollSource, units: .line,
                                         wheelCount: 2, wheel1: int32Clamped(lineV),
                                         wheel2: int32Clamped(lineH),
                                         wheel3: 0) else { return Unmanaged.passUnretained(event) }
-                rev.setIntegerValueField(.scrollWheelEventPointDeltaAxis1,
-                    value: -event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
-                rev.setIntegerValueField(.scrollWheelEventPointDeltaAxis2,
-                    value: -event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2))
-                rev.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1,
-                    value: -event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1))
-                rev.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2,
-                    value: -event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2))
-                rev.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
-                rev.post(tap: .cghidEventTap)
+                let sign: Int64 = reverse ? -1 : 1
+                let p1 = event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)
+                let p2 = event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)
+                let f1 = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
+                let f2 = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2)
+                out.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: sign * (transpose ? p2 : p1))
+                out.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: sign * (transpose ? p1 : p2))
+                out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(sign) * (transpose ? f2 : f1))
+                out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: Double(sign) * (transpose ? f1 : f2))
+                out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
+                out.post(tap: .cghidEventTap)
                 return nil
             }
             return Unmanaged.passUnretained(event)
@@ -376,6 +395,25 @@ extension EventTapEngine {
     /// Scale a continuous (high-res) mouse's deltas by the Scroll-speed slider and flip them for
     /// reverse, in place. Neutral speed (0.5, the slider default) maps to gain 1.0 so the mouse keeps
     /// its native feel until the user actually moves the slider.
+    /// Post a fresh continuous (pixel) event with the axes SWAPPED — for axis-swap apps when the
+    /// hi-res stream is not animated. Same fresh-event dance as Standard-mode reverse: in-place
+    /// edits on a passthrough don't stick. Slider gain and reverse fold into the same event.
+    fileprivate func postTransposedContinuous(_ event: CGEvent, speed: Double, reverse: Bool) {
+        let gain = (speed / 0.5) * (reverse ? -1.0 : 1.0)
+        let pV = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) * gain
+        let pH = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) * gain
+        let fV = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * gain
+        let fH = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * gain
+        guard let out = CGEvent(scrollWheelEvent2Source: scrollSource, units: .pixel, wheelCount: 2,
+                                wheel1: int32Clamped(pH), wheel2: int32Clamped(pV),
+                                wheel3: 0) else { return }
+        out.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fH)
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fV)
+        out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
+        out.post(tap: .cghidEventTap)
+    }
+
     fileprivate func applyContinuous(_ event: CGEvent, speed: Double, reverse: Bool) {
         let gain = (speed / 0.5) * (reverse ? -1.0 : 1.0)
         if gain == 1.0 { return } // default speed, not reversed → leave the event untouched

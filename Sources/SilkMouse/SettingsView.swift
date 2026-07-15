@@ -73,6 +73,7 @@ struct SettingsView: View {
             if store.config.scrollMode != .standard {
                 ExcludedAppsView()
             }
+            TransposedAppsView() // axis-swap works in every scroll mode, including Standard
         }
         .formStyle(.grouped)
     }

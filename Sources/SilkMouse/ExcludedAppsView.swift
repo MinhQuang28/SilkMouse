@@ -7,26 +7,60 @@ struct ExcludedAppsView: View {
     @EnvironmentObject var store: ConfigStore
 
     var body: some View {
-        Section("Excluded apps") {
-            if store.config.excludedBundleIDs.isEmpty {
-                Text("No excluded apps")
+        AppListSection(
+            title: "Excluded apps",
+            emptyLabel: "No excluded apps",
+            addPrompt: "Exclude",
+            footer: "Scroll smoothing is turned off while the pointer is over these apps — the wheel behaves natively there. Reverse and scroll speed still apply.",
+            bundleIDs: $store.config.excludedBundleIDs)
+    }
+}
+
+/// Settings section for the axis-swap list: apps where the wheel's vertical motion scrolls
+/// HORIZONTALLY (purpose-built for horizontal-first browsers like Nimble Commander's Brief
+/// panels). Unlike exclusion, smoothing keeps working — we transpose the axes ourselves.
+struct TransposedAppsView: View {
+    @EnvironmentObject var store: ConfigStore
+
+    var body: some View {
+        AppListSection(
+            title: "Vertical → horizontal apps",
+            emptyLabel: "No axis-swap apps",
+            addPrompt: "Add",
+            footer: "While the pointer is over these apps, vertical wheel scrolling scrolls horizontally (and tilt scrolls vertically). Smoothing, reverse and speed all still apply — made for Nimble Commander's Brief mode and other horizontal-first views.",
+            bundleIDs: $store.config.verticalToHorizontalBundleIDs)
+    }
+}
+
+/// One reusable per-app list section: rows with app icon/name, remove buttons, an add-app picker.
+private struct AppListSection: View {
+    let title: String
+    let emptyLabel: String
+    let addPrompt: String
+    let footer: String
+    @Binding var bundleIDs: [String]
+
+    var body: some View {
+        Section(title) {
+            if bundleIDs.isEmpty {
+                Text(emptyLabel)
                     .foregroundStyle(.secondary)
             }
-            ForEach(store.config.excludedBundleIDs, id: \.self) { bundleID in
+            ForEach(bundleIDs, id: \.self) { bundleID in
                 HStack {
-                    ExcludedAppRow(bundleID: bundleID)
+                    AppRow(bundleID: bundleID)
                     Spacer()
                     Button {
-                        store.config.excludedBundleIDs.removeAll { $0 == bundleID }
+                        bundleIDs.removeAll { $0 == bundleID }
                     } label: {
                         Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Remove from exclusions")
+                    .help("Remove from this list")
                 }
             }
             Button("Add App…", action: addApp)
-            Text("Scroll smoothing is turned off while the pointer is over these apps — the wheel behaves natively there (fixes apps that scroll horizontally, like Nimble Commander). Reverse and scroll speed still apply.")
+            Text(footer)
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -38,18 +72,18 @@ struct ExcludedAppsView: View {
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = [.applicationBundle]
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.prompt = "Exclude"
+        panel.prompt = addPrompt
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
             guard let id = Bundle(url: url)?.bundleIdentifier,
-                  !store.config.excludedBundleIDs.contains(id) else { continue }
-            store.config.excludedBundleIDs.append(id)
+                  !bundleIDs.contains(id) else { continue }
+            bundleIDs.append(id)
         }
     }
 }
 
-/// One excluded app: icon + display name when the app is installed, otherwise the raw bundle ID.
-private struct ExcludedAppRow: View {
+/// One listed app: icon + display name when the app is installed, otherwise the raw bundle ID.
+private struct AppRow: View {
     let bundleID: String
 
     var body: some View {

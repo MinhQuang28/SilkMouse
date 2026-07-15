@@ -42,6 +42,10 @@ struct AppConfig: Codable, Sendable {
     var excludedBundleIDs: [String] = [] // apps where scroll smoothing is bypassed (wheel stays
                                          // native, so AppKit's vertical→horizontal transposition for
                                          // horizontal-only views — e.g. Nimble Commander — still works)
+    var verticalToHorizontalBundleIDs: [String] = [] // apps where the scroll axes are SWAPPED (the
+                                         // wheel scrolls horizontally): purpose-built for
+                                         // horizontal-first browsers like Nimble Commander's Brief
+                                         // panels — smoothing stays on, we transpose ourselves
     var mappings: [ButtonMapping] = AppConfig.defaultMappings
 
     /// Sensible defaults so the app is useful on first launch.
@@ -58,7 +62,7 @@ extension AppConfig {
         case enabled, reverseScroll, scrollMode, smoothScroll, scrollSpeed, scrollLines
         case scrollAcceleration, smoothHighRes
         case spaceDragButton, spaceDragThreshold, spaceDragReverse, spaceDragFollowFinger
-        case excludedBundleIDs, mappings
+        case excludedBundleIDs, verticalToHorizontalBundleIDs, mappings
     }
 
     init(from decoder: Decoder) throws {
@@ -81,6 +85,7 @@ extension AppConfig {
         spaceDragReverse   = try c.decodeIfPresent(Bool.self,            forKey: .spaceDragReverse)   ?? spaceDragReverse
         spaceDragFollowFinger = try c.decodeIfPresent(Bool.self,       forKey: .spaceDragFollowFinger) ?? spaceDragFollowFinger
         excludedBundleIDs  = try c.decodeIfPresent([String].self,        forKey: .excludedBundleIDs) ?? excludedBundleIDs
+        verticalToHorizontalBundleIDs = try c.decodeIfPresent([String].self, forKey: .verticalToHorizontalBundleIDs) ?? verticalToHorizontalBundleIDs
         mappings           = try c.decodeIfPresent([ButtonMapping].self, forKey: .mappings)          ?? mappings
     }
 
@@ -99,6 +104,7 @@ extension AppConfig {
         try c.encode(spaceDragReverse, forKey: .spaceDragReverse)
         try c.encode(spaceDragFollowFinger, forKey: .spaceDragFollowFinger)
         try c.encode(excludedBundleIDs, forKey: .excludedBundleIDs)
+        try c.encode(verticalToHorizontalBundleIDs, forKey: .verticalToHorizontalBundleIDs)
         try c.encode(mappings, forKey: .mappings)
     }
 }
