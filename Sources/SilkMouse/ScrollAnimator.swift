@@ -264,8 +264,7 @@ final class ScrollAnimator: NSObject {
         // Tighter clamp than the wheel paths: when the user stops a free-spinning wheel by hand,
         // whatever is queued here still drains — keep that "extra glide" bounded to ~a screenful.
         remV = min(max(remV + pxV * gain, -ScrollAnimator.pixelMaxRemaining), ScrollAnimator.pixelMaxRemaining)
-        remH = min(max(remH + pxH * gain, -ScrollAnimator.pixelMaxRemaining), ScrollAnimator.pixelMaxRemaining)
-        // Pixel input never coasts: a hi-res mouse delivers each physical notch as a BURST of events
+        remH = min(max(remH + pxH * gain, -ScrollAnimator.pixelMaxRemaining), ScrollAnimator.pixelMaxRemaining)        // Pixel input never coasts: a hi-res mouse delivers each physical notch as a BURST of events
         // a few ms apart, so inter-event gaps can't tell a flick from one slow notch. The spring's
         // own tail already smooths the end of a fast hi-res swipe.
         lastMotionTime = now
@@ -703,21 +702,30 @@ final class ScrollAnimator: NSObject {
         // quick — already applied before the glide). Passing them through would double-apply the
         // effect in apps with their own modifier handling (Chromium transposes Shift+wheel itself).
         event.flags = []
-        // Carry the exact sub-pixel delta for apps that read the fixed-point field (most modern ones),
-        // so slow scrolls glide instead of stepping between whole pixels.
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV)
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: preciseH)
         // Set the legacy LINE delta explicitly from an accumulator (1 line ≈ 10 px, like a real
         // trackpad): most frames carry 0 lines, roughly one ±1 per 10 px of glide. Left to the
         // constructor, every frame can end up as a whole wheel line — terminals in mouse-reporting
         // mode (vim/tmux/TUIs) then receive 60–120 wheel reports per second, flooding the program
         // until raw `ESC[<65;…M` sequences spill onto the screen as garbage text.
+        //
+        // WRITE ORDER MATTERS: the line-delta setter re-syncs the fixed-point and point deltas to
+        // the whole-line value (they are three views of one axis), so the precise pixel writes
+        // must come AFTER it — line first, then fixed-point, then point. Writing the line delta
+        // last quantizes every frame to whole lines: slow glides then move in 0/±1 px lumps
+        // (visible shaking) and everything scrolls ~10× slower than planned.
         lineCarryV += preciseV / 10
         lineCarryH += preciseH / 10
         let lv = lineCarryV.rounded(.towardZero); lineCarryV -= lv
         let lh = lineCarryH.rounded(.towardZero); lineCarryH -= lh
         event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lv))
         event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lh))
+        // Precise sub-pixel deltas for apps that read the fixed-point field (most modern ones),
+        // so slow scrolls glide instead of stepping between whole pixels.
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: preciseV)
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: preciseH)
+        // Integer pixel deltas last — the line write above re-synced them to line×8.
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(intV))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(intH))
         // Stamp the phases so phase-aware apps (Safari) render a coherent gesture + coast, not jumps.
         // At most one of the two is nonzero at a time — a real trackpad stream looks the same.
         event.setIntegerValueField(scrollPhaseField, value: gesturePhase)

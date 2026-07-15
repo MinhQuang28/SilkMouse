@@ -491,17 +491,21 @@ extension EventTapEngine {
                                 wheel1: int32Clamped(pV), wheel2: int32Clamped(pH),
                                 wheel3: 0) else { return }
         out.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fV)
-        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fH)
         // Explicit line deltas (1 line ≈ 10 px) so terminals don't see a wheel line per event.
         // Carried across events, like the animator's lineCarry: slow scrolls (< 10 px/event)
-        // must accumulate into whole lines or terminals would never move.
+        // must accumulate into whole lines or terminals would never move. Written FIRST: the
+        // line-delta setter re-syncs the fixed-point/point fields to the whole-line value, so
+        // the precise pixel writes must follow it (same ordering rule as ScrollAnimator.post).
         contLineCarryV += fV / 10
         contLineCarryH += fH / 10
         let lv = contLineCarryV.rounded(.towardZero); contLineCarryV -= lv
         let lh = contLineCarryH.rounded(.towardZero); contLineCarryH -= lh
         out.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(lv))
         out.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(lh))
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fV)
+        out.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fH)
+        out.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(int32Clamped(pV)))
+        out.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(int32Clamped(pH)))
         out.setIntegerValueField(.eventSourceUserData, value: ScrollAnimator.syntheticTag)
         out.flags = [] // modifiers already applied upstream (Shift = the swap itself)
         out.post(tap: .cghidEventTap)
