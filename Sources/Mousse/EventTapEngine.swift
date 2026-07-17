@@ -174,12 +174,23 @@ final class EventTapEngine {
     /// While capturing in Settings, let mouse-button events pass through to the UI (so the capture
     /// field can read which button was clicked) instead of remapping/swallowing them.
     func setCaptureMode(_ on: Bool) {
-        lock.lock(); captureMode = on; lock.unlock()
+        lock.lock()
+        captureMode = on
+        // Capture bypasses the gesture's button-up handling; abandon any in-flight drag or it
+        // would be left stuck `down` (same flag wake/device-change raise).
+        if on { pendingDragCancel = true }
+        lock.unlock()
     }
 
     /// Update the live snapshot when config changes.
     func reload(_ config: AppConfig) {
         lock.lock()
+        // Disabling the engine or re-assigning the gesture button hides the button-up of an
+        // in-flight drag from the gesture — it would stay stuck `down` and hijack every later
+        // drag into Space switches. Cancel it the same way wake/device-change do.
+        if (enabled && !config.enabled) || spaceDragButton != config.spaceDragButton {
+            pendingDragCancel = true
+        }
         enabled = config.enabled
         reverseScroll = config.reverseScroll
         scrollMode = config.scrollMode
@@ -352,8 +363,12 @@ final class EventTapEngine {
                 let dir = reverse ? -1.0 : 1.0
                 let mag: Double
                 if isContinuous {
-                    mag = (event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
-                         + event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2)) * dir / 800.0
+                    // Point delta is pixels under BOTH driver conventions (fixedPt is fractional
+                    // LINES per the CG contract, but pixels on e.g. Logitech-style drivers) — read
+                    // the unambiguous field. Same 800 scale: point ≈ fixedPt on the hardware the
+                    // constant was tuned on.
+                    mag = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)
+                               + event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) * dir / 800.0
                 } else {
                     // One notch = one comfortable zoom step ('s medium tick ÷ its 800 scale).
                     let notches = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
@@ -381,8 +396,10 @@ final class EventTapEngine {
                 let animated = (mode == .smooth || mode == .smoothStep) && !excludeSmoothing
                 if smoothHiRes, animated {
                     let dir = reverse ? -1.0 : 1.0
-                    var pxV = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * dir
-                    var pxH = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * dir
+                    // Point delta = pixels under both driver conventions; fixedPt would read as
+                    // LINES (10× too slow) on contract-following drivers.
+                    var pxV = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) * dir
+                    var pxH = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) * dir
                     if transpose { swap(&pxV, &pxH) }
                     if pxV != 0 || pxH != 0 {
                         scrollAnimator.addPixels(pxV: pxV, pxH: pxH, speed: speed)
@@ -493,11 +510,12 @@ extension EventTapEngine {
     fileprivate func postContinuous(_ event: CGEvent, gain: Double, transpose: Bool) {
         var pV = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)) * gain
         var pH = Double(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)) * gain
-        // Sanitize before any Int conversion: the tap sees every process's synthetic scroll
-        // events, and a huge or non-finite delta in one of them would trap `Int64(_:)` and
-        // crash the whole app. ±1e6 px/event is far beyond any real device.
-        var fV = sanitizedDelta(event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1) * gain)
-        var fH = sanitizedDelta(event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2) * gain)
+        // Line/fixedPt outputs are derived from the SAME point-field pixels (sanitized: the tap
+        // sees every process's synthetic scroll events, and a huge delta would trap `Int64(_:)`).
+        // Reading the input's fixedPt here instead would count 10× too few lines on drivers that
+        // follow the CG contract (fixedPt = fractional lines, not pixels).
+        var fV = sanitizedDelta(pV)
+        var fH = sanitizedDelta(pH)
         if transpose { swap(&pV, &pH); swap(&fV, &fH) }
         guard let out = CGEvent(scrollWheelEvent2Source: scrollSource, units: .pixel, wheelCount: 2,
                                 wheel1: int32Clamped(pV), wheel2: int32Clamped(pH),

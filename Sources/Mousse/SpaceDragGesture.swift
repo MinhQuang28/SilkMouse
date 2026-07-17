@@ -191,6 +191,7 @@ final class SpaceDragGesture {
     }
 
     private func triggerVertical(up: Bool) {
-        (up ? SystemActions.missionControl : SystemActions.appExpose)()
+        // Via RemapAction so the Dock-SPI-unavailable fallback (synthesized Ctrl+↑/↓) applies here too.
+        (up ? RemapAction.missionControl : RemapAction.appExpose).post()
     }
 }

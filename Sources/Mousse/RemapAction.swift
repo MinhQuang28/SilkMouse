@@ -32,12 +32,16 @@ enum RemapAction: Codable, Equatable, Hashable, Sendable {
         switch self {
         case let .keyStroke(code, control, option, command, shift):
             // Mission Control / App Exposé are WindowServer hotkeys that ignore synthetic key events
-            // on recent macOS — drive them via the Dock SPI instead (reliable).
+            // on recent macOS — drive them via the Dock SPI instead (reliable). If the SPI didn't
+            // resolve, fall through to the synthesized keystroke below: a real attempt on older
+            // macOS beats a silent no-op.
             if control && !option && !command && !shift {
-                if code == 0x7E { SystemActions.missionControl(); return } // Ctrl+Up
-                if code == 0x7D { SystemActions.appExpose();      return } // Ctrl+Down
+                if SystemActions.isAvailable {
+                    if code == 0x7E { SystemActions.missionControl(); return } // Ctrl+Up
+                    if code == 0x7D { SystemActions.appExpose();      return } // Ctrl+Down
+                }
                 // Space switching: drive the symbolic hotkey directly so it works even when the
-                // user disabled the "Move left/right a space" keyboard shortcut.
+                // user remapped the "Move left/right a space" keyboard shortcut.
                 if code == 0x7B { SystemActions.spaceLeft();  return }     // Ctrl+Left
                 if code == 0x7C { SystemActions.spaceRight(); return }     // Ctrl+Right
             }

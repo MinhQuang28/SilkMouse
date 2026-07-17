@@ -1,9 +1,9 @@
 import XCTest
 @testable import Mousse
 
-/// Guards the persisted-config contract: round-trips, tolerant decoding (a missing key must fall back
-/// to a default, never throw — throwing would wipe the user's saved settings), and the legacy
-/// `smoothScroll` bool → `ScrollMode` bridge.
+/// Guards the persisted-config contract: round-trips, tolerant decoding (a missing key OR an
+/// invalid value must fall back to that field's default, never throw — throwing would wipe the
+/// user's saved settings), and the legacy `smoothScroll` bool → `ScrollMode` bridge.
 final class AppConfigTests: XCTestCase {
 
     private func roundTrip(_ config: AppConfig) throws -> AppConfig {
@@ -95,5 +95,51 @@ final class AppConfigTests: XCTestCase {
     func testScrollModeWinsOverLegacyBool() throws {
         let both = #"{"scrollMode":"smoothStep","smoothScroll":false}"#.data(using: .utf8)!
         XCTAssertEqual(try JSONDecoder().decode(AppConfig.self, from: both).scrollMode, .smoothStep)
+    }
+
+    // MARK: - Present-but-invalid values (config from a newer app version, or hand-edited)
+
+    /// An unknown enum case resets THAT field only — every other saved setting must survive.
+    func testUnknownEnumValueFallsBackWithoutWipingRest() throws {
+        let json = #"{"scrollMode":"turbo","enabled":false,"scrollLines":7}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: json)
+        XCTAssertEqual(decoded.scrollMode, .smooth) // unknown case → default
+        XCTAssertEqual(decoded.enabled, false)      // neighbors survive
+        XCTAssertEqual(decoded.scrollLines, 7)
+    }
+
+    func testWrongTypeValueFallsBackWithoutWipingRest() throws {
+        let json = #"{"scrollSpeed":"fast","reverseScroll":true}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: json)
+        XCTAssertEqual(decoded.scrollSpeed, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(decoded.reverseScroll, true)
+    }
+
+    /// One broken mapping is dropped; intact ones survive (previously it wiped the whole config).
+    func testBrokenMappingElementIsDroppedNotFatal() throws {
+        let good = String(data: try JSONEncoder().encode(ButtonMapping(buttonNumber: 4, action: .spaceLeft)),
+                          encoding: .utf8)!
+        let json = #"{"scrollLines":7,"mappings":[\#(good),{"buttonNumber":5,"action":{"warpDrive":{}}}]}"#
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: json.data(using: .utf8)!)
+        XCTAssertEqual(decoded.mappings.count, 1)
+        XCTAssertEqual(decoded.mappings[0].buttonNumber, 4)
+        XCTAssertEqual(decoded.mappings[0].action, .spaceLeft)
+        XCTAssertEqual(decoded.scrollLines, 7)
+    }
+
+    /// A mapping missing its `id` (hand-edited/older file) keeps the mapping under a fresh id.
+    func testMappingWithoutIdIsKept() throws {
+        let json = #"{"mappings":[{"buttonNumber":6,"action":{"launchpad":{}}}]}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: json)
+        XCTAssertEqual(decoded.mappings.count, 1)
+        XCTAssertEqual(decoded.mappings[0].buttonNumber, 6)
+        XCTAssertEqual(decoded.mappings[0].action, .launchpad)
+    }
+
+    /// A structurally wrong file (top level not an object) yields defaults instead of throwing.
+    func testNonObjectTopLevelDecodesToDefaults() throws {
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: #"[]"#.data(using: .utf8)!)
+        XCTAssertEqual(decoded.enabled, AppConfig().enabled)
+        XCTAssertEqual(decoded.mappings.count, AppConfig.defaultMappings.count)
     }
 }

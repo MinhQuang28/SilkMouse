@@ -8,9 +8,10 @@ import Foundation
 ///   • CoreGraphics Symbolic-HotKey (SHK) API — switching Spaces.
 ///
 /// Switching Spaces: we READ which key the user has bound to the Space-switch hotkey (read-only) and
-/// synthesize exactly that key, so it works even if they remapped it. If the binding can't be read or
-/// is disabled, we fall back to the macOS default (Ctrl+←/→). We deliberately NEVER write the SHK
-/// configuration — this only ever adds mouse-driven input, it does not modify any system setting.
+/// synthesize exactly that key, so it works even if they remapped it. If the binding can't be read at
+/// all, we fall back to the macOS default (Ctrl+←/→); if it reads as disabled we skip instead (see
+/// `postSHK`). We deliberately NEVER write the SHK configuration — this only ever adds mouse-driven
+/// input, it does not modify any system setting.
 enum SystemActions {
 
     // MARK: - Dock notifications (Mission Control / Exposé / Show Desktop)
@@ -62,21 +63,34 @@ enum SystemActions {
     private static let getSHK    = lookup("CGSGetSymbolicHotKeyValue", as: GetSHKFn.self)
     private static let isEnabled = lookup("CGSIsSymbolicHotKeyEnabled", as: IsEnabledFn.self)
 
-    /// Trigger a Space-switch hotkey by synthesizing the key it's bound to (read-only lookup). Falls
-    /// back to the macOS default Ctrl+arrow if the binding can't be read or is disabled. Never writes
-    /// any system configuration — a harmless no-op at worst if the user disabled the shortcut entirely.
+    /// Trigger a Space-switch hotkey by synthesizing the key it's bound to (read-only lookup).
+    /// If the binding can't be READ (SPI unavailable), assume the macOS default Ctrl+arrow. But if
+    /// it reads as disabled or bound to a character key we can't replay, do NOTHING: WindowServer
+    /// wouldn't consume the keystroke, so posting one would type a real Ctrl+arrow into the focused
+    /// app (caret jumps in editors). Never writes any system configuration.
     private static func postSHK(_ shk: Int32, defaultVKC: UInt16) {
         queue.async {
             var keq: UInt16 = 0, vkc: UInt16 = 0, mods: UInt32 = 0
-            if let getSHK, let isEnabled,
-               getSHK(shk, &keq, &vkc, &mods) == 0, isEnabled(shk),
-               keq == kNullKeyEquivalent, vkc != kNullKeyEquivalent {
-                // The hotkey resolves by virtual key code — replay exactly what the user has bound.
-                postKey(vkc, mods)
-            } else {
-                postKey(defaultVKC, kControlMask)
+            guard let getSHK, let isEnabled, getSHK(shk, &keq, &vkc, &mods) == 0 else {
+                postKey(defaultVKC, kControlMask) // binding unreadable — assume the default
+                return
             }
+            guard isEnabled(shk), keq == kNullKeyEquivalent, vkc != kNullKeyEquivalent else {
+                logSkippedSHK()
+                return
+            }
+            // The hotkey resolves by virtual key code — replay exactly what the user has bound.
+            postKey(vkc, mods)
         }
+    }
+
+    private static var loggedSkippedSHK = false // touched only on `queue`
+    private static func logSkippedSHK() {
+        guard !loggedSkippedSHK else { return }
+        loggedSkippedSHK = true
+        NSLog("Mousse: skipping Space switch — the \"Move left/right a space\" shortcut is disabled "
+            + "or bound to a character key (enable it in System Settings > Keyboard > Shortcuts > "
+            + "Mission Control)")
     }
 
     private static func postKey(_ vkc: UInt16, _ mods: UInt32) {
