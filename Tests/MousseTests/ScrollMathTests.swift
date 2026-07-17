@@ -1,5 +1,5 @@
 import XCTest
-@testable import SilkMouse
+@testable import Mousse
 
 /// Guards the spring scroll math (`ScrollAnimator.springAdvance`) — the most regression-prone part,
 /// since scroll feel has been re-tuned repeatedly. Verifies it converges to exactly the accumulated

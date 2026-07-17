@@ -50,7 +50,7 @@ enum SystemActions {
     private static let kControlMask: UInt32 = 1 << 18 // kCGSControlKeyMask == CGEventFlags.maskControl
 
     // Runs SHK reads and the synthesized key off the event-tap thread.
-    private static let queue = DispatchQueue(label: "com.silkmouse.shk", qos: .userInteractive)
+    private static let queue = DispatchQueue(label: "com.mousse.shk", qos: .userInteractive)
 
     private typealias GetSHKFn    = @convention(c) (Int32, UnsafeMutablePointer<UInt16>, UnsafeMutablePointer<UInt16>, UnsafeMutablePointer<UInt32>) -> Int32
     private typealias IsEnabledFn = @convention(c) (Int32) -> Bool

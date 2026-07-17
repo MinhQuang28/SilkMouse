@@ -35,7 +35,7 @@ URL for them above, as well as copies of any plain-text lines
 beginning with `Required Notice:` that the licensor provided
 with the software.  For example:
 
-> Required Notice: Copyright Ha Minh Quang (https://github.com/MinhQuang28/SilkMouse)
+> Required Notice: Copyright Ha Minh Quang (https://github.com/MinhQuang28/Mousse)
 
 ## Changes and New Works License
 
@@ -132,4 +132,4 @@ of your licenses.
 
 ---
 
-Required Notice: Copyright Ha Minh Quang (https://github.com/MinhQuang28/SilkMouse)
+Required Notice: Copyright Ha Minh Quang (https://github.com/MinhQuang28/Mousse)

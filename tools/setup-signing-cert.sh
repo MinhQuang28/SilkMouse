@@ -8,7 +8,7 @@
 # Idempotent: if the identity already exists, it does nothing.
 set -euo pipefail
 
-CERT_NAME="SilkMouse Local Signing"
+CERT_NAME="Mousse Local Signing"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 if security find-certificate -c "$CERT_NAME" "$KEYCHAIN" >/dev/null 2>&1; then
@@ -25,7 +25,7 @@ distinguished_name = dn
 x509_extensions = v3
 prompt = no
 [dn]
-CN = SilkMouse Local Signing
+CN = Mousse Local Signing
 [v3]
 basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature

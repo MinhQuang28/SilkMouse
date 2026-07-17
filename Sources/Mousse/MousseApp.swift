@@ -1,15 +1,15 @@
 import SwiftUI
 
-/// SilkMouse — a lean, single-process menu-bar mouse utility for macOS 15+.
+/// Mousse — a lean, single-process menu-bar mouse utility for macOS 15+.
 /// Original codebase (not derived from any other app); uses only public macOS APIs.
 @main
-struct SilkMouseApp: App {
+struct MousseApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = ConfigStore.shared
 
     var body: some Scene {
-        MenuBarExtra("SilkMouse", systemImage: "computermouse.fill") {
+        MenuBarExtra("Mousse", systemImage: "computermouse.fill") {
             MenuContent().environmentObject(store)
         }
         Settings {

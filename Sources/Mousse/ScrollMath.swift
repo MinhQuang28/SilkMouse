@@ -115,7 +115,7 @@ struct ScrollProfile {
     }
 
     /// (minSens, maxSens) px/tick for the speed slider (anchors at 0 / 0.5 / 1, linear extension
-    /// past 1 — SilkMouse's slider runs 0.05…1.5) and the display under the cursor: maxSens gets
+    /// past 1 — Mousse's slider runs 0.05…1.5) and the display under the cursor: maxSens gets
     /// a 10%-weighted scale by screen span relative to a 1080p baseline ('s screen scaling),
     /// so big displays fling proportionally farther.
     func sensitivity(slider: Double, screenSizeFactor: Double = 1.0) -> (minSens: Double, maxSens: Double) {

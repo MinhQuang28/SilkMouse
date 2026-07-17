@@ -67,7 +67,7 @@ final class EventTapEngine {
         reload(config)
         guard thread == nil else { return }
         let t = Thread { [weak self] in self?.threadMain() }
-        t.name = "com.silkmouse.event-tap"
+        t.name = "com.mousse.event-tap"
         t.qualityOfService = .userInteractive
         thread = t
         t.start()
@@ -140,7 +140,7 @@ final class EventTapEngine {
         if opened != kIOReturnSuccess {
             // Non-fatal: device callbacks won't fire, so report-rate re-enumeration recovery is skipped
             // (Space/app-switch recovery is unaffected). Log so a silent failure is diagnosable.
-            NSLog("SilkMouse: IOHIDManagerOpen failed (0x%X) — report-rate scroll recovery disabled", opened)
+            NSLog("Mousse: IOHIDManagerOpen failed (0x%X) — report-rate scroll recovery disabled", opened)
         }
         hidManager = mgr
     }
@@ -160,7 +160,7 @@ final class EventTapEngine {
         guard let tap else { return }
         if !CGEvent.tapIsEnabled(tap: tap) {
             CGEvent.tapEnable(tap: tap, enable: true)
-            NSLog("SilkMouse: event tap was disabled (sleep/wake?), re-enabled")
+            NSLog("Mousse: event tap was disabled (sleep/wake?), re-enabled")
         }
     }
 
@@ -221,14 +221,14 @@ final class EventTapEngine {
                                         callback: eventTapCallback,
                                         userInfo: refcon)
             if created == nil {
-                NSLog("SilkMouse: event tap not created (Accessibility not granted yet?), retrying…")
+                NSLog("Mousse: event tap not created (Accessibility not granted yet?), retrying…")
                 Thread.sleep(forTimeInterval: 1.0)
             }
         }
         let tap = created!
         self.tap = tap
         guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
-            NSLog("SilkMouse: failed to create run-loop source for the event tap") // would trap below
+            NSLog("Mousse: failed to create run-loop source for the event tap") // would trap below
             return
         }
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)

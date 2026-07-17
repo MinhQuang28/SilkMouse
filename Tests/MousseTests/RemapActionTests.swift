@@ -1,5 +1,5 @@
 import XCTest
-@testable import SilkMouse
+@testable import Mousse
 
 /// Guards the button-action model: every variant must survive Codable round-trips (a mapping that
 /// fails to decode would silently vanish from the user's config) and the preset display names that

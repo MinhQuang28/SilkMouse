@@ -1,4 +1,4 @@
-# SilkMouse
+# Mousse
 
 A lightweight, single-process menu-bar mouse utility for macOS 15+ (Sequoia and later).
 It gives a plain USB/Bluetooth mouse the things macOS leaves out: smooth scrolling, button
@@ -46,30 +46,30 @@ or any system configuration changes.
 
 ## Install
 
-> **Note for testers:** SilkMouse is currently signed with a **local (non-notarized) certificate**
+> **Note for testers:** Mousse is currently signed with a **local (non-notarized) certificate**
 > — there is no Apple Developer ID behind it yet — so macOS will block the app on first launch.
 > That warning is expected; the steps below get past it. If you'd rather not trust a pre-built
 > binary, build from source instead (no Gatekeeper steps needed).
 
 ### Option 1 — Download the pre-built app (3 steps)
 
-**Step 1 — Install.** Download `SilkMouse.zip` from the
-[latest release](https://github.com/MinhQuang28/SilkMouse/releases), unzip it, and drag
-`SilkMouse.app` into your **Applications** folder.
+**Step 1 — Install.** Download `Mousse.zip` from the
+[latest release](https://github.com/MinhQuang28/Mousse/releases), unzip it, and drag
+`Mousse.app` into your **Applications** folder.
 
 **Step 2 — Unblock.** Clear the Gatekeeper quarantine flag (one-time; a downloaded,
 non-notarized app won't open without it):
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/SilkMouse.app
+xattr -dr com.apple.quarantine /Applications/Mousse.app
 ```
 
 Not comfortable with Terminal? Instead: double-click the app once (macOS blocks it), then
 System Settings → Privacy & Security → scroll down → **Open Anyway** → open the app again.
 
-**Step 3 — Open & grant access.** Launch SilkMouse from Applications and grant
+**Step 3 — Open & grant access.** Launch Mousse from Applications and grant
 **Accessibility** when prompted (System Settings → Privacy & Security → Accessibility →
-enable SilkMouse). Done — the mouse icon appears in the menu bar; click it to configure
+enable Mousse). Done — the mouse icon appears in the menu bar; click it to configure
 scrolling and buttons.
 
 ### Option 2 — Build from source
@@ -81,11 +81,11 @@ Requires the Xcode (beta) Swift toolchain.
 # survives every rebuild (otherwise the app re-prompts after each build).
 tools/setup-signing-cert.sh
 
-# Build the menu-bar .app into build/SilkMouse.app
+# Build the menu-bar .app into build/Mousse.app
 ./build-app.sh
 
 # Run it
-open build/SilkMouse.app
+open build/Mousse.app
 ```
 
 ## Usage
@@ -111,15 +111,15 @@ tools/package-release.sh --publish
 
 | Path                          | Purpose                                                      |
 | ----------------------------- | ------------------------------------------------------------ |
-| `Sources/SilkMouse/`          | App source (event tap, scroll animator, settings UI, config) |
-| `Tests/SilkMouseTests/`       | Unit tests                                                   |
+| `Sources/Mousse/`          | App source (event tap, scroll animator, settings UI, config) |
+| `Tests/MousseTests/`       | Unit tests                                                   |
 | `build-app.sh`                | Assemble & sign the `.app` bundle                            |
 | `tools/setup-signing-cert.sh` | Create the stable local signing certificate                  |
 | `tools/package-release.sh`    | Build, zip, hash, and (optionally) publish a release         |
 
 ## License
 
-SilkMouse is **source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE.md):
+Mousse is **source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE.md):
 
 - ✅ Free for **personal, noncommercial use** — install it, read the source, modify it, build it yourself, share it for free.
 - ❌ **Commercial use is not permitted** — you may not copy this source into your own product, sell it, charge for access to it, or otherwise use it for commercial purposes without a separate license from the author.

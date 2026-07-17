@@ -411,7 +411,7 @@ final class ScrollAnimator: NSObject {
     /// concurrent wake can't double-spawn); caller starts the returned thread AFTER unlocking.
     private func spawnLinkThreadLocked() -> Thread {
         let t = Thread { [weak self] in self?.runLoop() }
-        t.name = "com.silkmouse.scroll-animator"
+        t.name = "com.mousse.scroll-animator"
         t.qualityOfService = .userInteractive
         thread = t
         return t

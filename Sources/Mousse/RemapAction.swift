@@ -25,7 +25,7 @@ enum RemapAction: Codable, Equatable, Hashable, Sendable {
     /// tap callback is unreliable for system hotkeys and would stall the tap). A FRESH event source
     /// is made per keystroke so modifier state never accumulates/desyncs across calls — reusing one
     /// source made Space-switching flaky (it worked once, then stopped).
-    private static let keyQueue = DispatchQueue(label: "com.silkmouse.keystroke", qos: .userInteractive)
+    private static let keyQueue = DispatchQueue(label: "com.mousse.keystroke", qos: .userInteractive)
 
     /// Perform the action.
     func post() {

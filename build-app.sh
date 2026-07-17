@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build SilkMouse and assemble a runnable menu-bar .app bundle (ad-hoc signed).
+# Build Mousse and assemble a runnable menu-bar .app bundle (ad-hoc signed).
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -20,9 +20,9 @@ else
     SWIFT="$(which swift)" || { echo "Error: swift not found in PATH or Xcode"; exit 1; }
 fi
 
-APP_NAME="SilkMouse"
-BUNDLE_ID="com.silkmouse.app"
-VERSION="0.8.3"
+APP_NAME="Mousse"
+BUNDLE_ID="com.mousse.app"
+VERSION="0.9.0"
 OUT="build/${APP_NAME}.app"
 
 echo "==> swift build -c release"
@@ -50,7 +50,7 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>${VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSHumanReadableCopyright</key><string>SilkMouse</string>
+    <key>NSHumanReadableCopyright</key><string>Mousse</string>
 </dict>
 </plist>
 PLIST
@@ -59,7 +59,7 @@ PLIST
 # A fixed cert keeps the designated requirement constant across rebuilds, so Accessibility
 # is granted ONCE and survives every rebuild. Fall back to ad-hoc if the cert isn't set up.
 SIGN_HASH="$(security find-identity "$HOME/Library/Keychains/login.keychain-db" \
-    | awk '/SilkMouse Local Signing/ {print $2; exit}')"
+    | awk '/Mousse Local Signing/ {print $2; exit}')"
 if [ -n "$SIGN_HASH" ]; then
     echo "==> signing with stable identity ($SIGN_HASH)"
     codesign --force --sign "$SIGN_HASH" --timestamp=none "$OUT" >/dev/null 2>&1

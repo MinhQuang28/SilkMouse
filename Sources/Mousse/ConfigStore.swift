@@ -20,15 +20,17 @@ final class ConfigStore: ObservableObject {
     private init() {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = support.appendingPathComponent("SilkMouse", isDirectory: true)
+        let dir = support.appendingPathComponent("Mousse", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("config.json")
 
-        // One-time migration: the app used to be called QmouseFix — adopt its config so the
-        // rename doesn't silently reset anyone's settings. (Copy, not move: harmless leftover.)
-        let legacy = support.appendingPathComponent("QmouseFix/config.json")
+        // One-time migration: the app was called SilkMouse (and QmouseFix before that) — adopt
+        // the newest prior config so a rename doesn't silently reset anyone's settings.
+        // (Copy, not move: harmless leftover.)
         if !FileManager.default.fileExists(atPath: fileURL.path),
-           FileManager.default.fileExists(atPath: legacy.path) {
+           let legacy = ["SilkMouse/config.json", "QmouseFix/config.json"]
+               .map({ support.appendingPathComponent($0) })
+               .first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
             try? FileManager.default.copyItem(at: legacy, to: fileURL)
         }
 
